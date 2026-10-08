@@ -48,6 +48,10 @@ cards rather than the workspace-card deck:
 - One-finger drag on a tile border resizes it. The border band is 16 logical
   pixels wide and includes the margin between the window and the work-area edge;
   the physical bottom edge is left to the home strip.
+- The bottom strip drives the home gesture: a short upward swipe backgrounds the
+  focused application, a long upward swipe opens overview.
+- A three-finger swipe navigates between workspaces (left/right/up/down).
+- Pulling down from the top edge opens the shade; the Dock supplies the status.
 - Overview, the lock screen, the shade and other exclusive surfaces stay
   Flutter-owned; the compositor does not capture those contacts.
 

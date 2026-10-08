@@ -17,7 +17,9 @@ boundaries may change before 1.0.
   entry.
 - The touch profile shows overview as a horizontally scrolling window strip:
   cards pan freely with release inertia, an upward swipe closes a card, and
-  tapping outside the cards exits overview.
+  tapping outside the cards exits overview. The bottom strip's home gesture
+  backgrounds the focused application or opens overview, a three-finger swipe
+  navigates workspaces, and pulling down from the top opens the shade.
 - Denial can now compose its Flutter shell from typed built-in and external
   plugins. The optional `denial-plugin-manager` package provides the graphical
   manager, CLI, version-matched compiler kit, validated Apply/recovery flow,
