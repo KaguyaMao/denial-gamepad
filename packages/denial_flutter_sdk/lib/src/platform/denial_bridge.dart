@@ -341,11 +341,13 @@ class DenialBridge {
     Rect contentRect, {
     bool exact = false,
     bool layoutDrop = false,
+    bool minimize = false,
   }) => _windows.configureWindow(
     window,
     contentRect,
     exact: exact,
     layoutDrop: layoutDrop,
+    minimize: minimize,
   );
 
   void sendKeyboardText(String text) => _input.sendKeyboardText(text);

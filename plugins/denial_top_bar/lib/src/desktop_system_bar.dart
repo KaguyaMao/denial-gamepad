@@ -46,10 +46,7 @@ class _DesktopSystemBarContent extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if (touch) {
-      return _TouchSystemBar(
-        monitorId: monitorId,
-        onOpenPowerSettings: onOpenPowerSettings,
-      );
+      return _TouchSystemBar(monitorId: monitorId);
     }
     final accent = WallpaperAccent(
       ref.watch(context.presentationServices.accent),
@@ -182,13 +179,9 @@ class _DesktopSystemBarContent extends ConsumerWidget {
 /// The touch Dock strip for the gamepad profile: launcher, running windows,
 /// battery, clock, and the session power entry, without card backgrounds.
 class _TouchSystemBar extends ConsumerWidget {
-  const _TouchSystemBar({
-    required this.monitorId,
-    required this.onOpenPowerSettings,
-  });
+  const _TouchSystemBar({required this.monitorId});
 
   final int monitorId;
-  final VoidCallback onOpenPowerSettings;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -234,7 +227,9 @@ class _TouchSystemBar extends ConsumerWidget {
                     _TouchBarButton(
                       key: ValueKey('touch-bar-window-${window.id}'),
                       label: window.title,
-                      onTap: () => services.activateWindow(window.id),
+                      onTap: () => window.active && !window.minimized
+                          ? services.minimizeWindow(window.id)
+                          : services.activateWindow(window.id),
                       child: Opacity(
                         opacity: window.minimized ? 0.55 : 1.0,
                         child: SizedBox.square(
@@ -262,7 +257,7 @@ class _TouchSystemBar extends ConsumerWidget {
           _TouchBarButton(
             key: const ValueKey('touch-bar-power'),
             label: 'Power',
-            onTap: onOpenPowerSettings,
+            onTap: services.openPowerMenu,
             child: Icon(
               Icons.power_settings_new_rounded,
               size: iconSize * 0.8,

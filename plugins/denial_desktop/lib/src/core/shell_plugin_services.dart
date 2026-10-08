@@ -203,6 +203,22 @@ final class DesktopShellServices implements ShellServices {
   }
 
   @override
+  void minimizeWindow(int id) {
+    for (final window in ref.read(referenceShellProvider).openAppWindows) {
+      if (window.objectId != id) continue;
+      // The touch Dock toggles its focused window into the background.
+      ref
+          .read(denialBridgeProvider)
+          .configureWindow(
+            window,
+            window.presentationCoordinateRect,
+            minimize: true,
+          );
+      return;
+    }
+  }
+
+  @override
   void toggleLauncher() => onToggleLauncher();
   @override
   void toggleDesktop() => ref.read(desktopVisibleProvider.notifier).toggle();

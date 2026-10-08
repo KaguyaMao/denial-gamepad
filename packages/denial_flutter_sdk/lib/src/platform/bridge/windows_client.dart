@@ -226,6 +226,7 @@ final class BridgeWindowsClient {
     Rect contentRect, {
     bool exact = false,
     bool layoutDrop = false,
+    bool minimize = false,
   }) {
     assert(!exact || !layoutDrop);
     if (window.windowId <= 0 ||
@@ -244,7 +245,9 @@ final class BridgeWindowsClient {
         wire.WindowRequestKind.ConfigureWindow,
         windowId: window.windowId,
         geometry: geometry,
-        flags: (exact ? 1 : 0) | (layoutDrop ? 2 : 0),
+        // Bit 2 backgrounds the window through the managed minimize path; its
+        // geometry is carried but ignored by the compositor.
+        flags: (exact ? 1 : 0) | (layoutDrop ? 2 : 0) | (minimize ? 4 : 0),
       ),
     );
   }

@@ -32,8 +32,7 @@ final class TopBarPlugin implements ShellSurface {
           PanelEdge.top,
           denialTouchSystemBarThickness,
         ),
-        visible:
-            !environment.locked && !environment.wallpaperSelectorVisible,
+        visible: !environment.locked && !environment.wallpaperSelectorVisible,
       );
     }
     if (layout.systemBarSide == PanelEdge.hidden ||

@@ -856,7 +856,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
       onOpenPowerMenu: widget.onOpenPowerMenu,
       onToggleLauncher: widget.onToggleLauncher,
       onOpenOverview: widget.onOpenOverview,
-    );    Widget surfacePlane(ShellSurfaceLayer layer) => ShellSurfacePlane(
+    );
+    Widget surfacePlane(ShellSurfaceLayer layer) => ShellSurfacePlane(
       key: ValueKey(layer),
       entries: surfaceEntries,
       layer: layer,

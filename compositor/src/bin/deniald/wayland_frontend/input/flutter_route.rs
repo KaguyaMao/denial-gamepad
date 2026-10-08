@@ -1258,6 +1258,14 @@ pub(super) fn begin_super_pointer_grab(
     button: u32,
     serial: Serial,
 ) -> bool {
+    // The touch shell owns tile geometry; no SUPER+LMB/RMB move/resize grab.
+    if state
+        .wayland
+        .as_ref()
+        .is_some_and(|frontend| frontend.gamepad_shell())
+    {
+        return false;
+    }
     let Some(window) = route.window.clone() else {
         return false;
     };

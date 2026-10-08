@@ -380,7 +380,7 @@ impl WaylandFrontend {
         window: &Window,
     ) -> Option<Rectangle<i32, Logical>> {
         #[cfg(feature = "flutter")]
-        if self.mobile_shell {
+        if self.mobile_shell || self.gamepad_shell {
             return None;
         }
         let root = window.toplevel()?.wl_surface();
@@ -608,7 +608,7 @@ impl WaylandFrontend {
         window: &Window,
     ) -> Option<(RestoredWindowPlacement, Rectangle<i32, Logical>)> {
         #[cfg(feature = "flutter")]
-        if self.mobile_shell {
+        if self.mobile_shell || self.gamepad_shell {
             return None;
         }
         if self.window_is_layout_managed(window) {
@@ -1217,6 +1217,10 @@ impl WaylandFrontend {
     }
 
     pub(crate) fn window_accepts_grab_updates(&self, window: &Window) -> bool {
+        #[cfg(feature = "flutter")]
+        if self.mobile_shell || self.gamepad_shell {
+            return false;
+        }
         ManagedWindow::new(window).is_some_and(|managed| {
             let facts = managed.facts();
             !facts.override_redirect

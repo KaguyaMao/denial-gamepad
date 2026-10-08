@@ -482,7 +482,15 @@ fn apply_local_window_command(state: &mut RuntimeState, window_id: u64, command:
         WindowCommand::Focus { .. } => {
             activate_local_flutter_window(state, window_id);
         }
-        WindowCommand::Configure { geometry, .. } => {
+        WindowCommand::Configure {
+            geometry,
+            minimized,
+            ..
+        } => {
+            if minimized {
+                minimize_toplevel_by_id(state, window_id);
+                return;
+            }
             let changed = state
                 .wayland
                 .as_mut()
@@ -519,16 +527,23 @@ fn apply_client_window_command(
             geometry,
             exact,
             layout_drop,
+            minimized,
             ..
-        } => configure_client_window(
-            state,
-            window_id,
-            window,
-            root_surface,
-            geometry,
-            exact,
-            layout_drop,
-        ),
+        } => {
+            if minimized {
+                minimize_toplevel_by_id(state, window_id);
+                return;
+            }
+            configure_client_window(
+                state,
+                window_id,
+                window,
+                root_surface,
+                geometry,
+                exact,
+                layout_drop,
+            )
+        }
         WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
         | WindowCommand::MoveToWorkspace { .. }
@@ -637,6 +652,16 @@ fn configure_client_window(
     exact: bool,
     layout_drop: bool,
 ) {
+    #[cfg(feature = "flutter")]
+    if state
+        .wayland
+        .as_ref()
+        .is_some_and(|frontend| frontend.gamepad_shell())
+    {
+        // Even legacy `exact` requests cannot turn a gamepad tile into a
+        // Flutter-owned rectangle. Managed actions use their own layout APIs.
+        return;
+    }
     if layout_drop && apply_layout_drop_from_command(state, window, geometry) {
         return;
     }
@@ -1701,6 +1726,14 @@ fn queue_local_window_action(state: &mut RuntimeState, window_id: u64, action: W
 
 #[cfg(feature = "flutter")]
 pub(super) fn toggle_always_on_top_focused_toplevel(state: &mut RuntimeState) -> bool {
+    #[cfg(feature = "flutter")]
+    if state
+        .wayland
+        .as_ref()
+        .is_some_and(|frontend| frontend.gamepad_shell())
+    {
+        return false;
+    }
     let local_window_id = focused_local_window(state);
     let client_window = local_window_id
         .is_none()
@@ -2381,6 +2414,14 @@ fn resolve_shell_fullscreen_entry(
 
 #[cfg(feature = "flutter")]
 pub(super) fn toggle_shell_fullscreen_focused_toplevel(state: &mut RuntimeState) -> bool {
+    // The touch shell tiles every window, so fullscreen maps to maximize.
+    if state
+        .wayland
+        .as_ref()
+        .is_some_and(|frontend| frontend.gamepad_shell())
+    {
+        return toggle_shell_maximize_focused_toplevel(state);
+    }
     if let Some(window_id) = focused_local_window(state) {
         queue_local_window_action(state, window_id, WindowAction::ToggleFullscreen);
         return true;
@@ -2665,6 +2706,21 @@ pub(super) fn apply_managed_client_state_request(
     window: &Window,
     request: ManagedClientStateRequest,
 ) -> bool {
+    // The touch shell tiles every window; a client fullscreen request becomes a
+    // tile maximize so it cannot escape the layout.
+    let request = if state
+        .wayland
+        .as_ref()
+        .is_some_and(|frontend| frontend.gamepad_shell())
+    {
+        match request {
+            ManagedClientStateRequest::Fullscreen(_) => ManagedClientStateRequest::Maximize,
+            ManagedClientStateRequest::Unfullscreen => ManagedClientStateRequest::Unmaximize,
+            request => request,
+        }
+    } else {
+        request
+    };
     #[cfg(feature = "flutter")]
     if let Some(exact) = state
         .wayland

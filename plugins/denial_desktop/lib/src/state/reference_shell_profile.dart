@@ -15,7 +15,10 @@ enum ReferenceShellProfile {
   static ReferenceShellProfile fromEnvironment(
     Map<String, String> environment,
   ) {
-    return switch (denialEnvironmentValue(environment, 'DENIAL_SHELL_PROFILE')) {
+    return switch (denialEnvironmentValue(
+      environment,
+      'DENIAL_SHELL_PROFILE',
+    )) {
       'mobile' => ReferenceShellProfile.mobile,
       'gamepad' => ReferenceShellProfile.gamepad,
       _ => ReferenceShellProfile.desktop,

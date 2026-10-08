@@ -424,6 +424,7 @@ fn configure_window_distinguishes_layout_drops_from_exact_geometry() {
             },
             exact: false,
             layout_drop: true,
+            minimized: false,
         }]
     );
 
@@ -438,6 +439,40 @@ fn configure_window_distinguishes_layout_drops_from_exact_geometry() {
         )),
         Err(WireError::Flags)
     ));
+}
+
+#[test]
+fn configure_window_decodes_the_touch_minimize_flag() {
+    let geometry = fb::WireRect::new(0.0, 76.0, 800.0, 1200.0);
+    let mut bridge = bridge();
+    assert!(
+        bridge
+            .handle(&window_request_with_flags(
+                fb::WindowRequestKind::ConfigureWindow,
+                0,
+                42,
+                Some(geometry),
+                6,
+                4,
+            ))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        bridge.drain_window_commands().collect::<Vec<_>>(),
+        vec![WindowCommand::Configure {
+            window_id: 42,
+            geometry: WindowGeometry {
+                x: 0.0,
+                y: 76.0,
+                width: 800.0,
+                height: 1200.0,
+            },
+            exact: false,
+            layout_drop: false,
+            minimized: true,
+        }]
+    );
 }
 
 fn input_layout(

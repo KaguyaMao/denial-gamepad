@@ -66,6 +66,9 @@ abstract interface class ShellWindowServices {
   ProviderListenable<List<ApplicationWindow>> windows(int monitorId);
   void activateWindow(int id);
 
+  /// Backgrounds one application window through the managed minimize path.
+  void minimizeWindow(int id);
+
   /// Live client content, fitted without resizing the window or forwarding input.
   /// Unavailable content uses an icon; the host owns the underlying textures.
   Widget buildWindowPreview(BuildContext context, int windowId);

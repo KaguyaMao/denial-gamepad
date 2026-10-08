@@ -480,7 +480,9 @@ table WindowRequest {
   // across client-authored maximize/fullscreen requests until a later normal
   // ConfigureWindow releases it. Bit 1 marks a desktop overview drop: stacking
   // applies its rectangle normally, while managed layouts resolve its centre
-  // to a layout-owned tile operation. The two bits are mutually exclusive.
+  // to a layout-owned tile operation. Bit 2 backgrounds the window through the
+  // managed minimize path; its geometry is carried but ignored. Bits 0 and 1
+  // are mutually exclusive.
   flags:uint;
   // Workspace requests only. monitor_id selects the independently switching
   // output; workspace_id is one-based.

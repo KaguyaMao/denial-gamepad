@@ -135,6 +135,9 @@ pub enum WindowCommand {
         geometry: WindowGeometry,
         exact: bool,
         layout_drop: bool,
+        /// Backgrounds the window through the managed minimize path. Geometry
+        /// is ignored because a minimized window leaves the composited layout.
+        minimized: bool,
     },
     SwitchWorkspace {
         monitor_id: i64,

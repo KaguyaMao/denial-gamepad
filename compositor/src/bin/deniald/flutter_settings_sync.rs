@@ -575,7 +575,19 @@ pub(super) fn synchronize_settings(
         events.scene_sync.mark_dirty();
     }
     let workspace_states = events.wayland.as_mut().and_then(|frontend| {
-        let settings = frontend.settings.workspace_settings();
+        // The touch profile always runs nine workspaces, independent of stored
+        // desktop settings; the layout kind is forced to Dwindle by
+        // `set_window_layout_kind`.
+        let settings = if frontend.gamepad_shell() {
+            let persisted = frontend.settings.workspace_settings();
+            super::settings::WorkspaceSettings {
+                enabled: true,
+                count: 9,
+                switching_orientation: persisted.switching_orientation,
+            }
+        } else {
+            frontend.settings.workspace_settings()
+        };
         if !frontend.set_workspace_settings(settings) {
             return None;
         }

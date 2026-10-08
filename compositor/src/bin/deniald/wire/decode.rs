@@ -337,9 +337,15 @@ impl WireBridge {
                     fb::WindowRequestKind::ConfigureWindow => {
                         const EXACT: u32 = 1 << 0;
                         const LAYOUT_DROP: u32 = 1 << 1;
-                        const FLAGS_MASK: u32 = EXACT | LAYOUT_DROP;
+                        // Backgrounds a touch-shell app through the managed
+                        // minimize path. Geometry is still required by the wire
+                        // shape but ignored by the compositor.
+                        const MINIMIZE: u32 = 1 << 2;
+                        const FLAGS_MASK: u32 = EXACT | LAYOUT_DROP | MINIMIZE;
                         let flags = request.flags();
-                        if flags & !FLAGS_MASK != 0 || flags & FLAGS_MASK == FLAGS_MASK {
+                        if flags & !FLAGS_MASK != 0
+                            || flags & (EXACT | LAYOUT_DROP) == (EXACT | LAYOUT_DROP)
+                        {
                             return Err(WireError::Flags);
                         }
                         let geometry =
@@ -349,6 +355,7 @@ impl WireBridge {
                             geometry,
                             exact: flags & EXACT != 0,
                             layout_drop: flags & LAYOUT_DROP != 0,
+                            minimized: flags & MINIMIZE != 0,
                         }
                     }
                     _ => unreachable!(),
