@@ -208,6 +208,7 @@ class _ProfileScene extends StatelessWidget {
       gamepad: profile == ReferenceShellProfile.gamepad,
       child: ShellSecureStage(
         useConfiguredLockAnimation: true,
+        chrome: scene.chrome,
         scene: Stack(
           fit: StackFit.expand,
           children: [

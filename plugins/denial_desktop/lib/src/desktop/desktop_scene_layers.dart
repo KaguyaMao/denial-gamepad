@@ -107,6 +107,7 @@ class DesktopOverviewInputLayer extends StatelessWidget {
     this.decoration,
     this.onBarrierPan,
     this.onBarrierFling,
+    this.touchMode = false,
     super.key,
   });
 
@@ -124,6 +125,10 @@ class DesktopOverviewInputLayer extends StatelessWidget {
   /// Horizontal release velocity for strip inertia, in logical pixels/second.
   final ValueChanged<double>? onBarrierFling;
 
+  /// Touch profile: the overview publishes `gamepadOverview` so the compositor
+  /// never treats its preview regions as client input targets.
+  final bool touchMode;
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -135,7 +140,9 @@ class DesktopOverviewInputLayer extends StatelessWidget {
             active: active,
             pointerPolicy: ShellPointerPolicy.fullScene,
             keyboardPolicy: ShellKeyboardPolicy.capture,
-            compositorPolicy: ShellCompositorPolicy.exclusive,
+            compositorPolicy: touchMode
+                ? ShellCompositorPolicy.gamepadOverview
+                : ShellCompositorPolicy.exclusive,
             child: const IgnorePointer(child: SizedBox.expand()),
           ),
         ),

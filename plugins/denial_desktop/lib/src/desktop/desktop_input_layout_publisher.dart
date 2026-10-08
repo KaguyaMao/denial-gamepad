@@ -411,6 +411,7 @@ class _DesktopInputLayoutPublisherState
       keyboardCapture: source.desktopVisible || interactions.capturesKeyboard,
       exclusiveShellMode: interactions.compositorExclusive,
       observeClientPointerPresses: interactions.observesClientPointerPresses,
+      gamepadOverview: interactions.gamepadOverview,
     );
     if (_lastSnapshot?.hasSameRoutingAs(snapshot) ?? false) {
       return true;

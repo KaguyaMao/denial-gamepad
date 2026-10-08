@@ -492,14 +492,20 @@ DenialWindow? desktopWindowAtPosition({
   DenialWindow? hit;
   for (final placement in workspace.placements.values) {
     final window = windowsById[placement.objectId];
-    if (placement.minimized ||
-        !workspace.isPlacementOnActiveWorkspace(placement) ||
-        window == null ||
+    final inOverview = workspace.isInOverview(placement.objectId);
+    if (window == null ||
+        (placement.minimized && !inOverview) ||
+        (!inOverview && !workspace.isPlacementOnActiveWorkspace(placement)) ||
         (topmost != null &&
             compareDesktopWindowStack(placement, topmost, windowsById) <= 0)) {
       continue;
     }
-    if (placement.frame.contains(position) ||
+    // In overview the cards are the visual (scrolled) frames, so hit testing
+    // must follow the strip rather than the native desktop rectangle.
+    final frame = inOverview
+        ? workspace.visualFrame(placement)
+        : placement.frame;
+    if (frame.contains(position) ||
         window.popupRoots.any(
           (popup) => window
               .mapSurfaceRect(popup, placement.contentRect)

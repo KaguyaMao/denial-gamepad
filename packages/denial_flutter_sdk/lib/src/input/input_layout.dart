@@ -12,6 +12,7 @@ class InputLayoutSnapshot {
     this.keyboardCapture = false,
     this.exclusiveShellMode = false,
     this.observeClientPointerPresses = false,
+    this.gamepadOverview = false,
   });
 
   final int epoch;
@@ -22,11 +23,13 @@ class InputLayoutSnapshot {
   final bool keyboardCapture;
   final bool exclusiveShellMode;
   final bool observeClientPointerPresses;
+  final bool gamepadOverview;
 
   bool hasSameRoutingAs(InputLayoutSnapshot other) {
     if (keyboardCapture != other.keyboardCapture ||
         exclusiveShellMode != other.exclusiveShellMode ||
         observeClientPointerPresses != other.observeClientPointerPresses ||
+        gamepadOverview != other.gamepadOverview ||
         shellRegions.length != other.shellRegions.length ||
         softwareKeyboardRegions.length !=
             other.softwareKeyboardRegions.length ||

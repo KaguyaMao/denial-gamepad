@@ -968,6 +968,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                 key: const ValueKey<String>('desktop-overview-input-layer'),
                 active: desktop.overviewActive,
                 onBarrierTap: onOverviewBarrierTap,
+                touchMode: gamepad,
                 decoration: DesktopWorkspaceOverviewDeck(
                   desktop: desktop,
                   onSelectWorkspace: widget.onSelectOverviewWorkspace,

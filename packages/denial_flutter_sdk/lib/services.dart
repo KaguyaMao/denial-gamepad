@@ -69,6 +69,9 @@ abstract interface class ShellWindowServices {
   /// Backgrounds one application window through the managed minimize path.
   void minimizeWindow(int id);
 
+  /// Closes one application window.
+  void closeWindow(int id);
+
   /// Live client content, fitted without resizing the window or forwarding input.
   /// Unavailable content uses an icon; the host owns the underlying textures.
   Widget buildWindowPreview(BuildContext context, int windowId);

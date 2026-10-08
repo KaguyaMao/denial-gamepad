@@ -22,6 +22,7 @@ import '../../widgets/notification_banner.dart';
 import '../../widgets/system_level_hud.dart';
 import '../mobile/mobile_application_scene.dart';
 import '../mobile/mobile_frame_timing_overlay.dart';
+import '../gamepad/gamepad_shade_chrome.dart';
 import 'panel_composition.dart';
 
 /// The reference plugin's desktop/mobile assembly. Alternative ShellApplication
@@ -67,10 +68,12 @@ class DenialShellApp extends StatelessWidget {
               ? <Widget>[]
               : <Widget>[SystemLevelHudLayer(), NotificationBannerLayer()],
         ),
-        // The touch gamepad profile reuses the desktop scene for now; touch
-        // policy is layered in through the desktop input publisher.
+        // The touch gamepad profile reuses the desktop scene; touch policy is
+        // layered in through the desktop input publisher, and its shade chrome
+        // keeps the top-edge pull-down while the Dock shows the status.
         gamepad: const DenialShellScene(
           content: DesktopShell(),
+          chrome: GamepadShadeChrome(),
           overlays: <Widget>[SystemLevelHudLayer(), NotificationBannerLayer()],
         ),
         pairingSurfaceBuilder: _buildPairingSurface,

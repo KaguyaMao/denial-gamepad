@@ -6,7 +6,7 @@ enum ShellPointerPolicy { none, childBounds, fullScene }
 
 enum ShellKeyboardPolicy { none, capture }
 
-enum ShellCompositorPolicy { normal, exclusive }
+enum ShellCompositorPolicy { normal, exclusive, gamepadOverview }
 
 @immutable
 class ShellInteractionSurface {
@@ -77,8 +77,23 @@ class ShellInteractionSnapshot {
   );
 
   bool get compositorExclusive => surfaces.values.any(
-    (surface) => surface.compositorPolicy == ShellCompositorPolicy.exclusive,
+    (surface) =>
+        surface.compositorPolicy == ShellCompositorPolicy.exclusive ||
+        surface.compositorPolicy == ShellCompositorPolicy.gamepadOverview,
   );
+
+  /// The touch overview marks its preview regions so the compositor never
+  /// treats them as client input targets. Other exclusive surfaces (lock,
+  /// screenshot, shade) always outrank overview.
+  bool get gamepadOverview =>
+      surfaces.values.any(
+        (surface) =>
+            surface.compositorPolicy == ShellCompositorPolicy.gamepadOverview,
+      ) &&
+      !surfaces.values.any(
+        (surface) =>
+            surface.compositorPolicy == ShellCompositorPolicy.exclusive,
+      );
 
   bool get observesClientPointerPresses =>
       surfaces.values.any((surface) => surface.observeClientPointerPresses);

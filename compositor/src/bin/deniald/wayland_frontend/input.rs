@@ -38,6 +38,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Serial;
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
+use smithay::wayland::seat::WaylandFocus;
 use tracing::{info, warn};
 
 #[cfg(feature = "flutter")]
@@ -859,12 +860,14 @@ impl WaylandFrontend {
         if self.gamepad_shell {
             // Flutter owns overview, the lock screen, the shade and any other
             // exclusive surface; only the bare desktop reaches tile gestures.
-            if layout.exclusive_shell()
-                || layout
-                    .shell_regions
-                    .iter()
-                    .any(|region| region.contains(scene_position.x, scene_position.y))
+            if (layout.exclusive_shell() && !layout.gamepad_overview())
+                || !layout.software_keyboard_regions.is_empty()
             {
+                return None;
+            }
+            // Overview is entirely Flutter-owned: card taps, upward-swipe close,
+            // and strip scrolling all run in the shell's gesture arena.
+            if layout.gamepad_overview() {
                 return None;
             }
             let output = self
@@ -906,14 +909,56 @@ impl WaylandFrontend {
                             },
                             in_gesture_strip: false,
                             in_move_corner: false,
-                            geometry_locked: true,
+                            geometry_locked: false,
                             gamepad_shell: true,
+                            monitor_id: i64::try_from(output.id.0).ok()?,
                             resize_edges: Some(edges),
                         });
                     }
                 }
             }
-            return None;
+            // The bottom strip drives the home gesture (short: background,
+            // long: overview); its target is the focused tile.
+            let region = layout
+                .windows
+                .iter()
+                .find(|region| region_accepts_input(region, scene_position));
+            let window_id = region.map_or_else(
+                || {
+                    self.space
+                        .elements()
+                        .find_map(|window| {
+                            let root = self.window_root_surface(window)?;
+                            let id = self.surface_id(&root)?;
+                            let focused = self
+                                .seat
+                                .get_keyboard()
+                                .and_then(|keyboard| keyboard.current_focus())
+                                .and_then(|focus| {
+                                    focus.wl_surface().map(|surface| surface.into_owned())
+                                });
+                            (focused.as_ref() == Some(&root) && !self.window_is_minimized(id))
+                                .then_some(id)
+                        })
+                        .unwrap_or(0)
+                },
+                |region| region.window_id,
+            );
+            return Some(TouchWindowTarget {
+                window_id,
+                geometry: super::super::wire::WindowGeometry {
+                    x: f64::from(bounds.loc.x),
+                    y: f64::from(bounds.loc.y),
+                    width: f64::from(bounds.size.w),
+                    height: f64::from(bounds.size.h),
+                },
+                in_gesture_strip: position.y >= f64::from(bounds.loc.y + bounds.size.h) - 48.0,
+                in_move_corner: false,
+                geometry_locked: true,
+                gamepad_shell: true,
+                monitor_id: i64::try_from(output.id.0).ok()?,
+                resize_edges: None,
+            });
         }
         if layout.exclusive_shell()
             || layout
@@ -956,6 +1001,7 @@ impl WaylandFrontend {
             },
             geometry_locked: region.geometry_locked(),
             gamepad_shell: false,
+            monitor_id: -1,
             resize_edges: None,
         })
     }

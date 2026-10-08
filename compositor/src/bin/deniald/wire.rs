@@ -97,6 +97,9 @@ const KEYBOARD_FLAGS_MASK: u32 = KEYBOARD_CTRL | KEYBOARD_PHASE_MASK;
 pub const INPUT_LAYOUT_KEYBOARD_CAPTURE: u32 = 1 << 0;
 pub const INPUT_LAYOUT_EXCLUSIVE_SHELL: u32 = 1 << 1;
 pub const INPUT_LAYOUT_OBSERVE_CLIENT_POINTER_PRESSES: u32 = 1 << 2;
+/// Flutter shows the touch overview: preview regions are never client input
+/// targets.
+pub const INPUT_LAYOUT_GAMEPAD_OVERVIEW: u32 = 1 << 3;
 pub const INPUT_WINDOW_VISIBLE: u32 = 1 << 0;
 pub const INPUT_WINDOW_HIT_TEST_DISABLED: u32 = 1 << 1;
 pub const INPUT_WINDOW_GEOMETRY_LOCKED: u32 = 1 << 2;
@@ -441,6 +444,10 @@ impl InputLayoutSnapshot {
 
     pub fn exclusive_shell(&self) -> bool {
         self.flags & INPUT_LAYOUT_EXCLUSIVE_SHELL != 0
+    }
+
+    pub fn gamepad_overview(&self) -> bool {
+        self.flags & INPUT_LAYOUT_GAMEPAD_OVERVIEW != 0
     }
 
     pub fn observes_client_pointer_presses(&self) -> bool {

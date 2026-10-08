@@ -48,6 +48,7 @@ const String denialWireToFlutterChannel = 'denial/wire/to_flutter';
 const int _inputLayoutKeyboardCapture = 1 << 0;
 const int _inputLayoutExclusiveShell = 1 << 1;
 const int _inputLayoutObserveClientPointerPresses = 1 << 2;
+const int _inputLayoutGamepadOverview = 1 << 3;
 const int _inputWindowVisible = 1 << 0;
 const int _inputWindowHitTestDisabled = 1 << 1;
 const int _inputWindowGeometryLocked = 1 << 2;
@@ -192,6 +193,9 @@ class DenialWireCodec {
     }
     if (snapshot.observeClientPointerPresses) {
       flags |= _inputLayoutObserveClientPointerPresses;
+    }
+    if (snapshot.gamepadOverview) {
+      flags |= _inputLayoutGamepadOverview;
     }
 
     return _encodeEnvelope(

@@ -229,9 +229,11 @@ class _TouchSystemBar extends ConsumerWidget {
                     _TouchBarButton(
                       key: ValueKey('touch-bar-window-${window.id}'),
                       label: window.title,
+                      indicator: window.active && !window.minimized,
                       onTap: () => window.active && !window.minimized
                           ? services.minimizeWindow(window.id)
                           : services.activateWindow(window.id),
+                      onLongPress: () => services.closeWindow(window.id),
                       child: Opacity(
                         opacity: window.minimized ? 0.55 : 1.0,
                         child: SizedBox.square(
@@ -323,11 +325,17 @@ class _TouchBarButton extends StatelessWidget {
     required this.label,
     required this.onTap,
     required this.child,
+    this.onLongPress,
+    this.indicator = false,
     super.key,
   });
 
   final String label;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  /// Draws the focused-window accent dot below the icon.
+  final bool indicator;
   final Widget child;
 
   @override
@@ -338,7 +346,26 @@ class _TouchBarButton extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        child: Padding(padding: const EdgeInsets.all(6), child: child),
+        onLongPress: onLongPress,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              child,
+              SizedBox(height: indicator ? 3 : 0),
+              if (indicator)
+                Container(
+                  width: 5,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: context.shellTheme.accent,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

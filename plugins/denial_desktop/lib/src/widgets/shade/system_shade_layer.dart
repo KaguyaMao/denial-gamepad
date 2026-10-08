@@ -16,9 +16,17 @@ import 'status_bar.dart';
 /// once released. All control state lives in providers, so this widget stays a
 /// thin animation host.
 class SystemShadeLayer extends ConsumerStatefulWidget {
-  const SystemShadeLayer({super.key, this.ignoring = false});
+  const SystemShadeLayer({
+    super.key,
+    this.ignoring = false,
+    this.showStatusBar = true,
+  });
 
   final bool ignoring;
+
+  /// The touch gamepad Dock provides its own status strip, so its shade hides
+  /// the status bar glyphs while keeping the pull-down gesture available.
+  final bool showStatusBar;
 
   @override
   ConsumerState<SystemShadeLayer> createState() => _SystemShadeLayerState();
@@ -134,10 +142,11 @@ class _SystemShadeLayerState extends ConsumerState<SystemShadeLayer>
                   ),
                 ),
               ),
-            ShadeStatusBar(
-              shadeProgress: _controller,
-              onDragStart: _selectPageFromStatusBar,
-            ),
+            if (widget.showStatusBar)
+              ShadeStatusBar(
+                shadeProgress: _controller,
+                onDragStart: _selectPageFromStatusBar,
+              ),
           ],
         ),
       ),

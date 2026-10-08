@@ -219,6 +219,15 @@ final class DesktopShellServices implements ShellServices {
   }
 
   @override
+  void closeWindow(int id) {
+    for (final window in ref.read(referenceShellProvider).openAppWindows) {
+      if (window.objectId != id) continue;
+      ref.read(denialBridgeProvider).closeWindow(window);
+      return;
+    }
+  }
+
+  @override
   void toggleLauncher() => onToggleLauncher();
   @override
   void toggleDesktop() => ref.read(desktopVisibleProvider.notifier).toggle();

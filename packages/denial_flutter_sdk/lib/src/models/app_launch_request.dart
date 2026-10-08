@@ -44,7 +44,14 @@ class AppLaunchRequest {
     if (existingObjectIds.contains(window.objectId)) {
       return false;
     }
-    return expectedAppIds.contains(normalizeAppId(window.appId));
+    if (expectedAppIds.contains(normalizeAppId(window.appId))) {
+      return true;
+    }
+    // Xwayland clients sometimes expose the launcher's title as their stable
+    // identity while Wayland clients expose app_id. Flatpak applications are
+    // especially inconsistent here, so use the requested display name as a
+    // constrained fallback after excluding all pre-existing windows.
+    return normalizeAppId(window.title) == normalizeAppId(appName);
   }
 
   static String normalizeAppId(String value) {

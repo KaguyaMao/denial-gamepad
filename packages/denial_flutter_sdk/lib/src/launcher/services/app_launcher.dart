@@ -46,15 +46,32 @@ class AppLauncher {
     if (executable != null) {
       add(p.basename(executable));
     }
+    // Flatpak and similar wrappers expose the real program through --command,
+    // which is what the launched client reports as its app_id.
+    for (var index = 0; index < argv.length; index += 1) {
+      final argument = argv[index];
+      if (argument.startsWith('--command=')) {
+        add(argument.substring('--command='.length));
+      } else if (argument == '--command' && index + 1 < argv.length) {
+        add(argv[index + 1]);
+      }
+    }
 
     return List<String>.unmodifiable(candidates);
   }
 
   DenialWindow? findOpenWindow(DesktopApp app, Iterable<DenialWindow> windows) {
     final expected = expectedWindowAppIds(app).map(_normalizeIdentity).toSet();
+    final name = _normalizeIdentity(app.name);
     for (final window in windows) {
-      if (window.isUserApp &&
-          expected.contains(_normalizeIdentity(window.appId))) {
+      if (!window.isUserApp) {
+        continue;
+      }
+      // Xwayland and Flatpak clients sometimes expose the launcher's title as
+      // their identity while Wayland clients expose app_id, so fall back to the
+      // requested display name.
+      if (expected.contains(_normalizeIdentity(window.appId)) ||
+          _normalizeIdentity(window.title) == name) {
         return window;
       }
     }
