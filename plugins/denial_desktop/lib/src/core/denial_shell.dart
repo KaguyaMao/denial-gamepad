@@ -205,6 +205,7 @@ class _ProfileScene extends StatelessWidget {
     // adaptations (exclusive/split policy, strip overview, dock) are layered in
     // through the desktop publisher.
     return DesktopInputLayoutPublisher(
+      gamepad: profile == ReferenceShellProfile.gamepad,
       child: ShellSecureStage(
         useConfiguredLockAnimation: true,
         scene: Stack(

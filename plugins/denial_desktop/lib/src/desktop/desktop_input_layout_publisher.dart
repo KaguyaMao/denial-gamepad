@@ -18,9 +18,18 @@ import 'desktop_workspace.dart';
 import 'desktop_input_surface_index.dart';
 
 class DesktopInputLayoutPublisher extends ConsumerStatefulWidget {
-  const DesktopInputLayoutPublisher({required this.child, super.key});
+  const DesktopInputLayoutPublisher({
+    required this.child,
+    this.gamepad = false,
+    super.key,
+  });
 
   final Widget child;
+
+  /// Touch-first desktop profile: nine workspaces, Dwindle tiles, and native
+  /// direct-touch routing are selected by the compositor's own profile flag;
+  /// this only mirrors the same policy into the shell's workspace state.
+  final bool gamepad;
 
   @override
   ConsumerState<DesktopInputLayoutPublisher> createState() =>
@@ -84,11 +93,14 @@ class _DesktopInputLayoutPublisherState
       final windows = shell.windows;
       final settings = ref.read(shellSettingsProvider).layout;
       final displayLayout = ref.read(displayLayoutProvider);
+      final windowLayout = widget.gamepad
+          ? DesktopWindowLayout.dwindle
+          : settings.windowLayout;
       ref
           .read(desktopWorkspaceProvider.notifier)
           .syncWorkspaceConfiguration(
-            enabled: settings.workspacesEnabled,
-            count: settings.workspaceCount,
+            enabled: widget.gamepad ? true : settings.workspacesEnabled,
+            count: widget.gamepad ? 9 : settings.workspaceCount,
             authoritativeActiveWorkspaces: <int, int>{
               for (final output
                   in displayLayout?.outputs ?? const <DisplayOutput>[])
@@ -107,7 +119,7 @@ class _DesktopInputLayoutPublisherState
             viewSize,
             devicePixelRatio,
             snapshotSequence: shell.windowSnapshotSequence,
-            windowLayout: settings.windowLayout,
+            windowLayout: windowLayout,
           );
       final source = _DesktopInputLayoutSource(
         desktopVisible: ref.read(desktopVisibleProvider),
@@ -122,7 +134,7 @@ class _DesktopInputLayoutPublisherState
         switcher: ref.read(desktopWindowSwitcherProvider),
         interactions: ref.read(shellInteractionRegistryProvider),
         displayLayout: displayLayout,
-        windowLayout: settings.windowLayout,
+        windowLayout: windowLayout,
       );
       if (_lastSource?.hasSameInputsAs(source) ?? false) {
         return;

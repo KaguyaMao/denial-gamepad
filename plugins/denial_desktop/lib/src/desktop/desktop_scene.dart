@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
+import 'package:denial_desktop/src/state/reference_shell_profile.dart';
 import 'package:denial_flutter_sdk/applications.dart';
 import 'package:denial_flutter_sdk/environment.dart';
 import 'package:denial_flutter_sdk/input.dart';
@@ -792,6 +793,9 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
               referenceShellProvider.select((state) => state.lockLayerVisible),
             ),
             settings: surfaceSettings,
+            gamepad:
+                ref.read(referenceShellProfileProvider) ==
+                ReferenceShellProfile.gamepad,
           ),
       ],
     );

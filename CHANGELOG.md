@@ -8,6 +8,13 @@ boundaries may change before 1.0.
 
 ### Added
 
+- The `gamepad` shell profile provides a touch-first desktop. Applications tile
+  into the active workspace while it has free space and replace the whole
+  workspace once it is full; replaced or squeezed-out applications keep their
+  split state in the background and stay visible in overview. A lone tile
+  resizes from any edge, a shared split boundary resizes both panes, and the top
+  bar presents a touch Dock with running windows, battery, clock, and a power
+  entry.
 - Denial can now compose its Flutter shell from typed built-in and external
   plugins. The optional `denial-plugin-manager` package provides the graphical
   manager, CLI, version-matched compiler kit, validated Apply/recovery flow,

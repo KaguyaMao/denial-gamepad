@@ -14,6 +14,9 @@ part 'desktop_system_bar_components.dart';
 part 'desktop_system_bar_media.dart';
 part 'desktop_workspace_indicator.dart';
 
+/// The touch Dock strip height, mirroring native `GAMEPAD_SYSTEM_BAR_THICKNESS`.
+const double denialTouchSystemBarThickness = 51.0;
+
 /// The desktop system bar. Its strip is reserved from the window work area,
 /// so windows maximize beside it while true fullscreen covers it.
 ///
@@ -28,6 +31,7 @@ class _DesktopSystemBarContent extends ConsumerWidget {
     required this.monitorId,
     required this.side,
     required this.onOpenPowerSettings,
+    this.touch = false,
   });
 
   static const double _edgePadding = 8.0;
@@ -37,9 +41,16 @@ class _DesktopSystemBarContent extends ConsumerWidget {
   final int monitorId;
   final PanelEdge side;
   final VoidCallback onOpenPowerSettings;
+  final bool touch;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (touch) {
+      return _TouchSystemBar(
+        monitorId: monitorId,
+        onOpenPowerSettings: onOpenPowerSettings,
+      );
+    }
     final accent = WallpaperAccent(
       ref.watch(context.presentationServices.accent),
     );
@@ -168,6 +179,116 @@ class _DesktopSystemBarContent extends ConsumerWidget {
   }
 }
 
+/// The touch Dock strip for the gamepad profile: launcher, running windows,
+/// battery, clock, and the session power entry, without card backgrounds.
+class _TouchSystemBar extends ConsumerWidget {
+  const _TouchSystemBar({
+    required this.monitorId,
+    required this.onOpenPowerSettings,
+  });
+
+  final int monitorId;
+  final VoidCallback onOpenPowerSettings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final services = ShellServicesScope.of(context);
+    final accent = WallpaperAccent(ref.watch(services.accent));
+    final battery = ref.watch(services.battery);
+    final now = ref.watch(services.clock).value ?? DateTime.now();
+    final windows = ref.watch(services.windows(monitorId));
+    final iconSize = 30.0;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        children: [
+          _TouchBarButton(
+            key: const ValueKey('touch-bar-launcher'),
+            label: 'Applications',
+            onTap: services.toggleLauncher,
+            child: Icon(
+              Icons.apps_rounded,
+              size: iconSize * 0.8,
+              color: context.shellTheme.accent,
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final window in windows)
+                    _TouchBarButton(
+                      key: ValueKey('touch-bar-window-${window.id}'),
+                      label: window.title,
+                      onTap: () => services.activateWindow(window.id),
+                      child: Opacity(
+                        opacity: window.minimized ? 0.55 : 1.0,
+                        child: SizedBox.square(
+                          dimension: iconSize,
+                          child: services.buildApplicationIcon(
+                            context,
+                            window.appId,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          if (battery.capacity != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _BatteryModule(accent: accent, status: battery),
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: _ClockModule(accent: accent, now: now),
+          ),
+          _TouchBarButton(
+            key: const ValueKey('touch-bar-power'),
+            label: 'Power',
+            onTap: onOpenPowerSettings,
+            child: Icon(
+              Icons.power_settings_new_rounded,
+              size: iconSize * 0.8,
+              color: context.shellColors.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A bare touch target for one Dock control, without a card background.
+class _TouchBarButton extends StatelessWidget {
+  const _TouchBarButton({
+    required this.label,
+    required this.onTap,
+    required this.child,
+    super.key,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: label,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Padding(padding: const EdgeInsets.all(6), child: child),
+      ),
+    );
+  }
+}
+
 /// Shrink-wraps the centered workspace pill along the bar's main axis.
 ///
 /// System-bar cards intentionally fill the cross axis. Without this flex
@@ -214,11 +335,15 @@ class DesktopSystemBar extends StatelessWidget {
     required this.monitorId,
     required this.side,
     required this.services,
+    this.touch = false,
     super.key,
   });
   final int monitorId;
   final PanelEdge side;
   final ShellServices services;
+
+  /// Touch Dock presentation for the gamepad profile.
+  final bool touch;
 
   @override
   Widget build(BuildContext context) => ShellServicesScope(
@@ -226,6 +351,7 @@ class DesktopSystemBar extends StatelessWidget {
     child: _DesktopSystemBarContent(
       monitorId: monitorId,
       side: side,
+      touch: touch,
       onOpenPowerSettings: services.openPowerSettings,
     ),
   );

@@ -54,6 +54,7 @@ final class ShellSurfaceEnvironment {
     required this.locked,
     required this.settings,
     required this.defaultOutputSelected,
+    this.gamepad = false,
   });
   final DisplayOutput output;
   final Rect workArea;
@@ -65,6 +66,11 @@ final class ShellSurfaceEnvironment {
   final bool wallpaperSelectorVisible;
   final bool locked;
   final ShellSettings settings;
+
+  /// Touch-first desktop profile (`DENIAL_SHELL_PROFILE=gamepad`). Plugins use
+  /// this to present the touch Dock, larger targets, and the fixed top strip
+  /// independently of stored desktop settings.
+  final bool gamepad;
 
   /// Whether this output belongs to the compositor's configured default set.
   /// It is a fact, not a requirement to place a surface here.
@@ -101,6 +107,7 @@ final class ShellSurfaceEnvironment {
           wallpaperSelectorVisible == other.wallpaperSelectorVisible &&
           locked == other.locked &&
           settings == other.settings &&
+          gamepad == other.gamepad &&
           defaultOutputSelected == other.defaultOutputSelected;
 
   @override
@@ -115,6 +122,7 @@ final class ShellSurfaceEnvironment {
     wallpaperSelectorVisible,
     locked,
     settings,
+    gamepad,
     defaultOutputSelected,
   );
 }
