@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
+import 'package:denial_desktop/src/state/reference_shell_profile.dart';
 import 'package:denial_flutter_sdk/applications.dart';
 import 'package:denial_flutter_sdk/environment.dart';
 import 'package:denial_flutter_sdk/models.dart';
@@ -23,6 +24,7 @@ import '../state/desktop_visibility.dart';
 import '../state/desktop_window_switcher.dart';
 import '../state/quick_settings.dart';
 import '../widgets/shell_frame_time_overlay.dart';
+import '../widgets/session/power_session_surface.dart';
 import 'desktop_overview_keyboard.dart';
 import 'desktop_overview_layout.dart';
 import 'desktop_overview_target.dart';
@@ -407,8 +409,12 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     // Stacking windows overlap, so spreading them apart is the useful view.
     // Managed layouts already avoid overlap and their arrangement is the
     // information, so they show true-to-layout workspace miniatures instead.
+    // The touch profile instead shows a horizontally scrolling window strip.
+    final gamepad =
+        ref.read(referenceShellProfileProvider) ==
+        ReferenceShellProfile.gamepad;
     final workspaceOverview =
-        layout.windowLayout != DesktopWindowLayout.stacking;
+        !gamepad && layout.windowLayout != DesktopWindowLayout.stacking;
     final target = DesktopOverviewTarget.resolve(
       viewSize: viewSize,
       displayLayout: displayLayout,
@@ -604,6 +610,11 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     _openSettingsPage(SettingsPageId.power);
   }
 
+  void _openPowerMenu() {
+    _closePanels();
+    showPowerSessionSurface(ref);
+  }
+
   void _openSettingsPage(SettingsPageId? page) {
     final environment = ref.read(startupEnvironmentProvider);
     _closePanels();
@@ -708,14 +719,15 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
 
   void _handleOverviewBarrierTap(Offset position) {
     final workspace = ref.read(desktopWorkspaceProvider);
-    final overview = workspace.overview;
-    if (overview == null || overview.backgroundBounds.contains(position)) {
+    if (workspace.overview == null) {
       return;
     }
     final windowsById = <int, DenialWindow>{
       for (final window in ref.read(referenceShellProvider).openAppWindows)
         window.objectId: window,
     };
+    // Tapping a presented window activates it; tapping anywhere else in the
+    // overview exits it.
     final target = desktopWindowAtPosition(
       position: position,
       workspace: workspace,
@@ -990,7 +1002,9 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
               onCloseWallpaperSelector: _closeWallpaperSelector,
               onOpenSettings: _openSettings,
               onOpenPowerSettings: _openPowerSettings,
+              onOpenPowerMenu: _openPowerMenu,
               onToggleLauncher: _toggleLauncher,
+              onOpenOverview: () => _toggleOverview(null),
               onCancelPanelClose: _cancelPanelClose,
               onSchedulePanelClose: _schedulePanelClose,
               onPanelOpened: _panelHoverController.openingCompleted,
@@ -1019,7 +1033,9 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       services: DesktopShellServices(
         ref: ref,
         onOpenPowerSettings: _openPowerSettings,
+        onOpenPowerMenu: _openPowerMenu,
         onToggleLauncher: _toggleLauncher,
+        onOpenOverview: () => _toggleOverview(null),
       ),
       child: scene,
     );

@@ -42,6 +42,7 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
     required this.desktopWidget,
     required this.dragging,
     this.selected = false,
+    this.swipeUpCloses = false,
     required this.label,
     required this.onTap,
     required this.onClose,
@@ -49,6 +50,7 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
     required this.onDragUpdate,
     required this.onDragEnd,
     required this.onDragCancel,
+    this.onFling,
     required this.child,
   });
 
@@ -57,6 +59,10 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
   final bool desktopWidget;
   final bool dragging;
   final bool selected;
+
+  /// Touch-first overview: an upward swipe on a card closes its application
+  /// instead of repositioning it. Pointer desktops keep drag-to-arrange.
+  final bool swipeUpCloses;
   final String label;
   final VoidCallback onTap;
   final VoidCallback onClose;
@@ -64,6 +70,9 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
   final ValueChanged<Offset> onDragUpdate;
   final VoidCallback onDragEnd;
   final VoidCallback onDragCancel;
+
+  /// Horizontal release velocity (logical pixels/second) for strip inertia.
+  final ValueChanged<double>? onFling;
   final Widget child;
 
   @override
@@ -74,9 +83,11 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
 class _DesktopOverviewPreviewInteractionState
     extends State<DesktopOverviewPreviewInteraction> {
   static const double _emphasizedScale = 1.018;
+  static const double _swipeCloseDistance = 96.0;
 
   bool _hovered = false;
   Offset? _lastGlobalDragPosition;
+  Offset _swipeTravel = Offset.zero;
 
   @override
   void didUpdateWidget(covariant DesktopOverviewPreviewInteraction oldWidget) {
@@ -86,6 +97,7 @@ class _DesktopOverviewPreviewInteractionState
     }
     if (!widget.overview) {
       _lastGlobalDragPosition = null;
+      _swipeTravel = Offset.zero;
     }
   }
 
@@ -98,6 +110,10 @@ class _DesktopOverviewPreviewInteractionState
 
   void _startDrag(DragStartDetails details) {
     _lastGlobalDragPosition = details.globalPosition;
+    _swipeTravel = Offset.zero;
+    if (widget.swipeUpCloses) {
+      return;
+    }
     widget.onDragStart();
   }
 
@@ -105,19 +121,46 @@ class _DesktopOverviewPreviewInteractionState
     final previousPosition = _lastGlobalDragPosition;
     final globalPosition = details.globalPosition;
     _lastGlobalDragPosition = globalPosition;
+    final delta = previousPosition == null
+        ? Offset.zero
+        : globalPosition - previousPosition;
+    if (widget.swipeUpCloses) {
+      _swipeTravel += delta;
+      // Horizontal motion scrolls the strip even when it starts on a card, so
+      // the whole overview pans freely. Only a deliberate upward swipe closes.
+      if (delta.dx != 0.0) {
+        widget.onDragUpdate(Offset(delta.dx, 0.0));
+      }
+      return;
+    }
     if (previousPosition != null) {
-      widget.onDragUpdate(globalPosition - previousPosition);
+      widget.onDragUpdate(delta);
     }
   }
 
-  void _endDrag() {
+  void _endDrag(DragEndDetails details) {
     _lastGlobalDragPosition = null;
+    if (widget.swipeUpCloses) {
+      final upSwipe =
+          _swipeTravel.dy <= -_swipeCloseDistance &&
+          _swipeTravel.dy.abs() > _swipeTravel.dx.abs();
+      _swipeTravel = Offset.zero;
+      if (upSwipe) {
+        widget.onClose();
+      } else {
+        widget.onFling?.call(details.velocity.pixelsPerSecond.dx);
+      }
+      return;
+    }
     widget.onDragEnd();
   }
 
   void _cancelDrag() {
     _lastGlobalDragPosition = null;
-    widget.onDragCancel();
+    _swipeTravel = Offset.zero;
+    if (!widget.swipeUpCloses) {
+      widget.onDragCancel();
+    }
   }
 
   void _handlePointerDown(PointerDownEvent event) {
@@ -157,7 +200,7 @@ class _DesktopOverviewPreviewInteractionState
             onTap: interactive ? widget.onTap : null,
             onPanStart: widget.overview ? _startDrag : null,
             onPanUpdate: widget.overview ? _updateDrag : null,
-            onPanEnd: widget.overview ? (_) => _endDrag() : null,
+            onPanEnd: widget.overview ? _endDrag : null,
             onPanCancel: widget.overview ? _cancelDrag : null,
             child: AnimatedScale(
               duration: Motion.tile,

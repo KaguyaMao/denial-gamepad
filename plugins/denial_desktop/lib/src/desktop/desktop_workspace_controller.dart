@@ -50,6 +50,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
   double _devicePixelRatio = 1.0;
   Map<int, Rect> _workAreas = const <int, Rect>{};
   DesktopWindowLayout _windowLayout = DesktopWindowLayout.stacking;
+  bool _stripOverview = false;
   Set<int> _localFlutterWindowIds = const <int>{};
   Map<int, int> _transientParentObjectIds = const <int, int>{};
   int _workspaceTransitionSerial = 0;
@@ -215,6 +216,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     double devicePixelRatio, {
     int snapshotSequence = 0,
     DesktopWindowLayout windowLayout = DesktopWindowLayout.stacking,
+    bool stripOverview = false,
   }) {
     if (viewSize.width <= 0.0 || viewSize.height <= 0.0) {
       return;
@@ -231,12 +233,14 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         snapshotSequence == _lastSyncedSnapshotSequence &&
         !pixelRatioChanged &&
         state.viewSize == viewSize &&
+        _stripOverview == stripOverview &&
         _windowLayout == windowLayout) {
       return;
     }
     _lastSyncedWindows = windows;
     _lastSyncedSnapshotSequence = snapshotSequence;
     _windowLayout = windowLayout;
+    _stripOverview = stripOverview;
     _localFlutterWindowIds = {
       for (final window in windows)
         if (window.isLocalFlutter) window.objectId,
@@ -507,6 +511,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
           DesktopOverviewLayout.arrange(
             items: overviewItems,
             bounds: nextOverview.bounds,
+            strip: _stripOverview,
           ),
         );
         for (final placement in next.values) {
@@ -520,7 +525,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         if (frames.isEmpty) {
           nextOverview = null;
         } else {
-          nextOverview = DesktopOverviewState(
+          final rebuilt = DesktopOverviewState(
             monitorId: nextOverview.monitorId,
             bounds: nextOverview.bounds,
             backgroundBounds: nextOverview.backgroundBounds,
@@ -531,6 +536,13 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
                     nextOverview.frames[nextOverview.selectedObjectId]?.center,
                   ),
             frames: frames,
+            // A live snapshot re-arranges the strip; keep the user's pan
+            // instead of snapping the scroll back to the start.
+            scrollOffset: nextOverview.scrollOffset,
+          );
+          final extent = _overviewStripExtent(rebuilt);
+          nextOverview = rebuilt.copyWith(
+            scrollOffset: rebuilt.scrollOffset.clamp(-extent, 0.0).toDouble(),
           );
         }
       }
@@ -633,7 +645,11 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
             z: placement.z,
           ),
     ];
-    final frames = DesktopOverviewLayout.arrange(items: items, bounds: bounds);
+    final frames = DesktopOverviewLayout.arrange(
+      items: items,
+      bounds: bounds,
+      strip: _stripOverview,
+    );
     if (frames.isEmpty) {
       return;
     }
@@ -1021,10 +1037,28 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
 
   void moveOverviewBy(int objectId, Offset delta) {
     final overview = state.overview;
+    if (overview == null) {
+      return;
+    }
+    if (_stripOverview) {
+      // The strip scrolls as a whole; cards never rearrange individually.
+      final content = _overviewStripExtent(overview);
+      final next = (overview.scrollOffset + delta.dx)
+          .clamp(-content, 0.0)
+          .toDouble();
+      if (next != overview.scrollOffset) {
+        // Scrolling only translates the strip; native window regions are
+        // unchanged, so do not wake the input-layout publisher per sample.
+        state = state.copyWith(
+          overview: overview.copyWith(scrollOffset: next),
+          bumpInputLayoutRevision: false,
+        );
+      }
+      return;
+    }
     final placement = state.placements[objectId];
-    final previewFrame = overview?.frames[objectId];
-    if (overview == null ||
-        placement == null ||
+    final previewFrame = overview.frames[objectId];
+    if (placement == null ||
         !placement.dragging ||
         previewFrame == null ||
         delta == Offset.zero) {
@@ -1033,6 +1067,14 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     final frames = Map<int, Rect>.of(overview.frames);
     frames[objectId] = _clampFrame(previewFrame.shift(delta), state.viewSize);
     state = state.copyWith(overview: overview.copyWith(frames: frames));
+  }
+
+  double _overviewStripExtent(DesktopOverviewState overview) {
+    var right = overview.bounds.left;
+    for (final frame in overview.frames.values) {
+      right = math.max(right, frame.right);
+    }
+    return math.max(0.0, right - overview.bounds.right);
   }
 
   bool endOverviewDrag(

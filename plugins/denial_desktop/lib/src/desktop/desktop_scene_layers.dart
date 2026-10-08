@@ -105,6 +105,8 @@ class DesktopOverviewInputLayer extends StatelessWidget {
     required this.onBarrierTap,
     required this.foregroundControls,
     this.decoration,
+    this.onBarrierPan,
+    this.onBarrierFling,
     super.key,
   });
 
@@ -115,6 +117,12 @@ class DesktopOverviewInputLayer extends StatelessWidget {
   /// Overview chrome above the dismissal barrier, such as workspace cards.
   /// Its own hit regions take taps; everything else reaches the barrier.
   final Widget? decoration;
+
+  /// Horizontal pan of a scrolling overview strip, in logical pixels.
+  final ValueChanged<Offset>? onBarrierPan;
+
+  /// Horizontal release velocity for strip inertia, in logical pixels/second.
+  final ValueChanged<double>? onBarrierFling;
 
   @override
   Widget build(BuildContext context) {
@@ -132,7 +140,12 @@ class DesktopOverviewInputLayer extends StatelessWidget {
           ),
         ),
         Positioned.fill(
-          child: _DesktopOverviewBarrier(active: active, onTap: onBarrierTap),
+          child: _DesktopOverviewBarrier(
+            active: active,
+            onTap: onBarrierTap,
+            onPan: onBarrierPan,
+            onFling: onBarrierFling,
+          ),
         ),
         if (decoration case final decoration?)
           Positioned.fill(child: decoration),
@@ -143,10 +156,17 @@ class DesktopOverviewInputLayer extends StatelessWidget {
 }
 
 class _DesktopOverviewBarrier extends StatelessWidget {
-  const _DesktopOverviewBarrier({required this.active, required this.onTap});
+  const _DesktopOverviewBarrier({
+    required this.active,
+    required this.onTap,
+    this.onPan,
+    this.onFling,
+  });
 
   final bool active;
   final ValueChanged<Offset> onTap;
+  final ValueChanged<Offset>? onPan;
+  final ValueChanged<double>? onFling;
 
   @override
   Widget build(BuildContext context) {
@@ -155,6 +175,10 @@ class _DesktopOverviewBarrier extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapUp: (details) => onTap(details.localPosition),
+        onPanUpdate: onPan == null ? null : (details) => onPan!(details.delta),
+        onPanEnd: onFling == null
+            ? null
+            : (details) => onFling!(details.velocity.pixelsPerSecond.dx),
       ),
     );
   }

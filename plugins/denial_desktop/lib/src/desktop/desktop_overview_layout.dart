@@ -43,6 +43,7 @@ abstract final class DesktopOverviewLayout {
   static Map<int, Rect> arrange({
     required List<DesktopOverviewItem> items,
     required Rect bounds,
+    bool strip = false,
   }) {
     final usefulItems = items
         .where((item) => isUsefulPreview(item.frame))
@@ -63,6 +64,10 @@ abstract final class DesktopOverviewLayout {
     final ordered = List<DesktopOverviewItem>.of(usefulItems);
     _sortSpatially(ordered, available);
 
+    if (strip) {
+      return _arrangeStrip(ordered, available);
+    }
+
     _OverviewCandidate? best;
     for (var rowCount = 1; rowCount <= ordered.length; rowCount += 1) {
       final rows = _partitionRows(ordered, rowCount);
@@ -72,6 +77,55 @@ abstract final class DesktopOverviewLayout {
       }
     }
     return best?.frames ?? const <int, Rect>{};
+  }
+
+  /// One horizontally scrolling row of natural-aspect cards.
+  ///
+  /// Touch-first shells present overview as a strip: every card keeps its own
+  /// shape at a readable height, the row is centred while it fits, and it
+  /// overflows the bounds rather than shrinking cards once it does not.
+  static Map<int, Rect> _arrangeStrip(
+    List<DesktopOverviewItem> items,
+    Rect available,
+  ) {
+    final height = available.height.clamp(1.0, 0.72 * available.height);
+    final naturalHeights = <double>[
+      for (final item in items)
+        math.min(
+          height,
+          _sourcePreviewHeight(item) == double.infinity
+              ? height
+              : _sourcePreviewHeight(item),
+        ),
+    ];
+    final heights = naturalHeights
+        .map((value) => value.clamp(120.0, height))
+        .toList();
+    final maxHeight = heights.reduce(math.max);
+    var rowWidth = 0.0;
+    for (var index = 0; index < items.length; index += 1) {
+      rowWidth += items[index].aspectRatio * heights[index];
+    }
+    rowWidth += gap * math.max(0, items.length - 1);
+
+    var left = rowWidth <= available.width
+        ? available.left + (available.width - rowWidth) / 2.0
+        : available.left;
+    final top = available.top + (available.height - maxHeight) / 2.0;
+    final frames = <int, Rect>{};
+    for (var index = 0; index < items.length; index += 1) {
+      final item = items[index];
+      final cardHeight = heights[index];
+      final frame = Rect.fromLTWH(
+        left,
+        top + (maxHeight - cardHeight) / 2.0,
+        item.aspectRatio * cardHeight,
+        cardHeight,
+      );
+      frames[item.objectId] = frame;
+      left = frame.right + gap;
+    }
+    return frames;
   }
 
   static void _sortSpatially(List<DesktopOverviewItem> items, Rect available) {

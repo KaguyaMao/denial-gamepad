@@ -132,10 +132,14 @@ final class DesktopShellServices implements ShellServices {
     required this.ref,
     required this.onOpenPowerSettings,
     required this.onToggleLauncher,
+    this.onOpenPowerMenu,
+    this.onOpenOverview,
   });
   final WidgetRef ref;
   final VoidCallback onOpenPowerSettings;
   final VoidCallback onToggleLauncher;
+  final VoidCallback? onOpenPowerMenu;
+  final VoidCallback? onOpenOverview;
 
   @override
   ProviderListenable<List<ApplicationWindow>> windows(int monitorId) =>
@@ -253,6 +257,10 @@ final class DesktopShellServices implements ShellServices {
           .switchWorkspace(monitorId: monitorId, workspaceId: workspaceId);
   @override
   void openPowerSettings() => onOpenPowerSettings();
+  @override
+  void openPowerMenu() => (onOpenPowerMenu ?? onOpenPowerSettings)();
+  @override
+  void openOverview() => onOpenOverview?.call();
   @override
   MouseCursor get normalCursor => ShellMouseCursors.normal;
   @override

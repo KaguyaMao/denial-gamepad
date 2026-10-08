@@ -43,6 +43,8 @@ List<Widget> buildDesktopWindowLayers({
   required ValueChanged<DenialWindow> onCancelOverviewDrag,
   Map<int, Rect> overviewEntryFrames = const <int, Rect>{},
   Map<int, Rect> overviewDepartingFrames = const <int, Rect>{},
+  bool swipeOverviewUpCloses = false,
+  ValueChanged<double>? onOverviewFling,
 }) {
   final layers = <Widget>[];
   for (final placement in placements) {
@@ -193,6 +195,8 @@ List<Widget> buildDesktopWindowLayers({
         onOverviewDragUpdate: (delta) => onUpdateOverviewDrag(window, delta),
         onOverviewDragEnd: () => onEndOverviewDrag(window),
         onOverviewDragCancel: () => onCancelOverviewDrag(window),
+        swipeOverviewUpCloses: swipeOverviewUpCloses,
+        onOverviewFling: onOverviewFling,
       ),
     );
     if (!desktopWidget && !departing) {

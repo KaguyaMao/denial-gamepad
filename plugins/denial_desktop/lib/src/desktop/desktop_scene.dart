@@ -14,6 +14,7 @@ import 'package:denial_flutter_sdk/surface_hosting.dart';
 import 'package:denial_flutter_sdk/surfaces.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/shell_plugin_services.dart';
@@ -281,7 +282,9 @@ class DesktopScene extends ConsumerStatefulWidget {
     required this.onCloseWallpaperSelector,
     required this.onOpenSettings,
     required this.onOpenPowerSettings,
+    required this.onOpenPowerMenu,
     required this.onToggleLauncher,
+    required this.onOpenOverview,
     required this.onCancelPanelClose,
     required this.onSchedulePanelClose,
     required this.onPanelOpened,
@@ -319,7 +322,9 @@ class DesktopScene extends ConsumerStatefulWidget {
   final VoidCallback onCloseWallpaperSelector;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenPowerSettings;
+  final VoidCallback onOpenPowerMenu;
   final VoidCallback onToggleLauncher;
+  final VoidCallback onOpenOverview;
   final VoidCallback onCancelPanelClose;
   final VoidCallback onSchedulePanelClose;
   final VoidCallback onPanelOpened;
@@ -339,7 +344,8 @@ class DesktopScene extends ConsumerStatefulWidget {
   ConsumerState<DesktopScene> createState() => _DesktopSceneState();
 }
 
-class _DesktopSceneState extends ConsumerState<DesktopScene> {
+class _DesktopSceneState extends ConsumerState<DesktopScene>
+    with SingleTickerProviderStateMixin {
   final Map<int, ClosingDesktopWindow> _closingWindows =
       <int, ClosingDesktopWindow>{};
   final Map<int, Rect> _minimizedPlacementExitFrames = <int, Rect>{};
@@ -351,6 +357,9 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
   late final DesktopMinimizeLayerHandoffController _minimizeLayerHandoff;
   late final DesktopMinimizedPlacementTransitionController
   _minimizedPlacementTransition;
+  late final Ticker _overviewFling;
+  double _overviewFlingVelocity = 0.0;
+  Duration _overviewFlingElapsed = Duration.zero;
   int _nextCloseId = 1;
   _DesktopHomeLayoutCache? _homeLayoutCache;
   _DesktopSceneTopologyCache? _topologyCache;
@@ -387,6 +396,44 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
             setState(() {});
           },
         );
+    _overviewFling = createTicker(_onOverviewFlingTick);
+  }
+
+  /// Continues a touch overview pan after release, like a scroll fling.
+  void _flingOverview(double velocity) {
+    if (!widget.desktop.overviewActive) {
+      return;
+    }
+    if (!velocity.isFinite || velocity.abs() < 220.0) {
+      return;
+    }
+    _overviewFlingVelocity = velocity;
+    _overviewFlingElapsed = Duration.zero;
+    if (!_overviewFling.isActive) {
+      _overviewFling.start();
+    }
+  }
+
+  void _onOverviewFlingTick(Duration elapsed) {
+    if (!widget.desktop.overviewActive) {
+      _overviewFling.stop();
+      _overviewFlingVelocity = 0.0;
+      return;
+    }
+    final dt = (elapsed - _overviewFlingElapsed).inMicroseconds / 1000000.0;
+    _overviewFlingElapsed = elapsed;
+    if (dt <= 0.0) {
+      return;
+    }
+    ref
+        .read(desktopWorkspaceProvider.notifier)
+        .moveOverviewBy(-1, Offset(_overviewFlingVelocity * dt, 0.0));
+    // Exponential decay: ~0.2s time constant keeps the glide short and calm.
+    _overviewFlingVelocity *= math.exp(-5.0 * dt);
+    if (_overviewFlingVelocity.abs() < 40.0) {
+      _overviewFlingVelocity = 0.0;
+      _overviewFling.stop();
+    }
   }
 
   _DesktopSceneTopology _cachedTopology({
@@ -669,6 +716,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
   @override
   void dispose() {
     _overviewDepartureTimer?.cancel();
+    _overviewFling.dispose();
     _minimizeLayerHandoff.dispose();
     _minimizedPlacementTransition.dispose();
     _minimizedPlacementExitFrames.clear();
@@ -686,6 +734,9 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
     final layerSurfaces = widget.layerSurfaces;
     final desktop = widget.desktop;
     final windowSwitcher = widget.windowSwitcher;
+    final gamepad =
+        ref.watch(referenceShellProfileProvider) ==
+        ReferenceShellProfile.gamepad;
     final displayLayout = widget.displayLayout;
     final minimizedWindowPlacement = widget.minimizedWindowPlacement;
     final showFrameTimingOverlay = widget.showFrameTimingOverlay;
@@ -802,9 +853,10 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
     final surfaceServices = DesktopShellServices(
       ref: ref,
       onOpenPowerSettings: onOpenPowerSettings,
+      onOpenPowerMenu: widget.onOpenPowerMenu,
       onToggleLauncher: widget.onToggleLauncher,
-    );
-    Widget surfacePlane(ShellSurfaceLayer layer) => ShellSurfacePlane(
+      onOpenOverview: widget.onOpenOverview,
+    );    Widget surfacePlane(ShellSurfaceLayer layer) => ShellSurfacePlane(
       key: ValueKey(layer),
       entries: surfaceEntries,
       layer: layer,
@@ -898,6 +950,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                         onCancelOverviewDrag: onCancelOverviewDrag,
                         overviewEntryFrames: _overviewEntryFrames,
                         overviewDepartingFrames: _overviewDepartingFrames,
+                        swipeOverviewUpCloses: gamepad,
+                        onOverviewFling: gamepad ? _flingOverview : null,
                       ),
                     ),
                   ),
@@ -913,6 +967,12 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                   desktop: desktop,
                   onSelectWorkspace: widget.onSelectOverviewWorkspace,
                 ),
+                onBarrierPan: gamepad
+                    ? (delta) => ref
+                          .read(desktopWorkspaceProvider.notifier)
+                          .moveOverviewBy(-1, delta)
+                    : null,
+                onBarrierFling: gamepad ? _flingOverview : null,
                 foregroundControls: <Widget>[
                   surfacePlane(ShellSurfaceLayer.desktopControls),
                 ],
@@ -961,6 +1021,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                         onCancelOverviewDrag: onCancelOverviewDrag,
                         overviewEntryFrames: _overviewEntryFrames,
                         overviewDepartingFrames: _overviewDepartingFrames,
+                        swipeOverviewUpCloses: gamepad,
+                        onOverviewFling: gamepad ? _flingOverview : null,
                       ),
                     ),
                   ),

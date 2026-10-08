@@ -120,6 +120,7 @@ class _DesktopInputLayoutPublisherState
             devicePixelRatio,
             snapshotSequence: shell.windowSnapshotSequence,
             windowLayout: windowLayout,
+            stripOverview: widget.gamepad,
           );
       final source = _DesktopInputLayoutSource(
         desktopVisible: ref.read(desktopVisibleProvider),

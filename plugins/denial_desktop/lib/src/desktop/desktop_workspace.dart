@@ -195,6 +195,7 @@ class DesktopOverviewState {
     required this.selectedObjectId,
     required Map<int, Rect> frames,
     this.workspaces,
+    this.scrollOffset = 0.0,
   }) : frames = Map.unmodifiable(frames);
 
   const DesktopOverviewState._({
@@ -204,6 +205,7 @@ class DesktopOverviewState {
     required this.selectedObjectId,
     required this.frames,
     required this.workspaces,
+    required this.scrollOffset,
   });
 
   final int monitorId;
@@ -218,11 +220,15 @@ class DesktopOverviewState {
   /// stacking spread.
   final DesktopWorkspaceOverview? workspaces;
 
+  /// Horizontal pan of a scrolling (strip) overview, in logical pixels.
+  final double scrollOffset;
+
   bool contains(int objectId) => frames.containsKey(objectId);
 
   DesktopOverviewState copyWith({
     int? selectedObjectId,
     Map<int, Rect>? frames,
+    double? scrollOffset,
   }) {
     return DesktopOverviewState._(
       monitorId: monitorId,
@@ -233,6 +239,7 @@ class DesktopOverviewState {
           ? this.frames
           : Map.unmodifiable(frames),
       workspaces: workspaces,
+      scrollOffset: scrollOffset ?? this.scrollOffset,
     );
   }
 }
@@ -579,7 +586,12 @@ class DesktopWorkspaceState {
   bool isInOverview(int objectId) => overview?.contains(objectId) ?? false;
 
   Rect visualFrame(DesktopWindowPlacement placement) {
-    return overview?.frames[placement.objectId] ?? placement.frame;
+    final frame = overview?.frames[placement.objectId];
+    if (frame == null) {
+      return placement.frame;
+    }
+    final scroll = overview?.scrollOffset ?? 0.0;
+    return scroll == 0.0 ? frame : frame.shift(Offset(scroll, 0.0));
   }
 
   DesktopWorkspaceState _replacePlacement(DesktopWindowPlacement placement) {
@@ -612,6 +624,7 @@ class DesktopWorkspaceState {
     int? workspaceCount,
     Map<int, int>? activeWorkspaces,
     Map<int, DesktopWorkspaceTransition>? workspaceTransitions,
+    bool bumpInputLayoutRevision = true,
   }) {
     return DesktopWorkspaceState._(
       placements: placements == null || identical(placements, this.placements)
@@ -623,11 +636,12 @@ class DesktopWorkspaceState {
       overview: clearOverview ? null : overview ?? this.overview,
       inputLayoutRevision:
           inputLayoutRevision +
-          ((placements != null ||
-                  overview != null ||
-                  clearOverview ||
-                  activeWorkspaces != null ||
-                  workspaceTransitions != null)
+          (bumpInputLayoutRevision &&
+                  (placements != null ||
+                      overview != null ||
+                      clearOverview ||
+                      activeWorkspaces != null ||
+                      workspaceTransitions != null)
               ? 1
               : 0),
       workspacesEnabled: workspacesEnabled ?? this.workspacesEnabled,

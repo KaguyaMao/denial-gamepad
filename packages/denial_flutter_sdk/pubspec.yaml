@@ -53,6 +53,7 @@ flutter:
   - assets/cursors/bibata_modern_ice/vertical_resize/
   - assets/cursors/bibata_modern_ice/working/
   - assets/branding/denial-dark.svg
+  - assets/branding/kaguya-avatar.png
   - assets/icons/application-default-icon.svg
   - assets/wallpapers/trails-h-accent-9-dark.png
   fonts:

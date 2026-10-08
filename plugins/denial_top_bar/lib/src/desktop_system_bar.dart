@@ -206,10 +206,23 @@ class _TouchSystemBar extends ConsumerWidget {
             key: const ValueKey('touch-bar-launcher'),
             label: 'Applications',
             onTap: services.toggleLauncher,
+            child: ClipOval(
+              child: Image.asset(
+                'packages/denial_flutter_sdk/assets/branding/kaguya-avatar.png',
+                width: iconSize,
+                height: iconSize,
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
+          _TouchBarButton(
+            key: const ValueKey('touch-bar-overview'),
+            label: 'Overview',
+            onTap: services.openOverview,
             child: Icon(
-              Icons.apps_rounded,
+              Icons.view_carousel_rounded,
               size: iconSize * 0.8,
-              color: context.shellTheme.accent,
+              color: context.shellColors.textPrimary,
             ),
           ),
           Expanded(

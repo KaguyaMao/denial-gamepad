@@ -165,6 +165,8 @@ class DesktopWindowFrame extends ConsumerWidget {
     required this.onOverviewDragUpdate,
     required this.onOverviewDragEnd,
     required this.onOverviewDragCancel,
+    this.onOverviewFling,
+    this.swipeOverviewUpCloses = false,
   });
 
   final DenialWindow window;
@@ -194,6 +196,12 @@ class DesktopWindowFrame extends ConsumerWidget {
   final ValueChanged<Offset> onOverviewDragUpdate;
   final VoidCallback onOverviewDragEnd;
   final VoidCallback onOverviewDragCancel;
+
+  /// Horizontal release velocity for touch overview strip inertia.
+  final ValueChanged<double>? onOverviewFling;
+
+  /// Touch overview: upward swipe on a card closes it.
+  final bool swipeOverviewUpCloses;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -381,6 +389,7 @@ class DesktopWindowFrame extends ConsumerWidget {
                         desktopWidget: desktopWidget,
                         dragging: placement.dragging,
                         selected: selected,
+                        swipeUpCloses: swipeOverviewUpCloses,
                         label: desktopWidget
                             ? context.l10n.desktopRestoreWindow(
                                 localizedWindowTitle(context, window),
@@ -394,6 +403,7 @@ class DesktopWindowFrame extends ConsumerWidget {
                         onDragUpdate: onOverviewDragUpdate,
                         onDragEnd: onOverviewDragEnd,
                         onDragCancel: onOverviewDragCancel,
+                        onFling: onOverviewFling,
                         child: Builder(
                           builder: (context) {
                             final client = _DesktopWindowContent(

@@ -92,6 +92,12 @@ abstract interface class ShellDesktopServices {
   ProviderListenable<bool> get desktopVisible;
   void toggleLauncher();
   void openPowerSettings();
+
+  /// Opens the session power surface (restart, shut down, log out, suspend).
+  void openPowerMenu();
+
+  /// Opens the window overview.
+  void openOverview();
 }
 
 /// Output geometry and workspace projections/actions.
