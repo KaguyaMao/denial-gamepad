@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=进入 Denial 手柄桌面
+Name[en]=Enter Denial Gamepad Desktop
+Comment=切换到 Denial 手柄桌面（全屏触摸手势）
+Comment[en]=Switch to the Denial gamepad desktop with full-screen touch gestures
+Exec=@SESSION_SELECT@ gamepad @GAMEPAD_SESSION_ID@
+TryExec=@SESSION_SELECT@
+Icon=/usr/share/icons/hicolor/256x256/apps/kaguyaos.png
+Terminal=false
+Type=Application
+Categories=System;
+Keywords=denial;gamepad;gesture;compositor;
+OnlyShowIn=KDE;
+StartupNotify=false

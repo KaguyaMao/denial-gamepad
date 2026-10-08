@@ -5,6 +5,24 @@ use super::*;
 const DENIAL_SESSION_TARGET: &str = "denial-session.target";
 const GRAPHICAL_SESSION_TARGET: &str = "graphical-session.target";
 const SYSTEMD_DBUS_NAME: &str = "org.freedesktop.systemd1";
+/// Upper bound on waiting for the session targets to reach `inactive` after a
+/// requested stop. The display manager is waiting on this process to exit, so a
+/// stalled job must not hold the VT hostage indefinitely.
+const SESSION_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// Environment variables Denial publishes into the systemd user manager and the
+/// D-Bus activation environment. They describe *this* compositor's session, so
+/// they must be withdrawn on exit; a fast Denial -> Plasma relogin can reuse the
+/// running user manager, and a stale `WAYLAND_DISPLAY`/`XDG_CURRENT_DESKTOP`
+/// makes the next session's portals and KDE init time out into a black screen.
+const SESSION_ENVIRONMENT_KEYS: [&str; 7] = [
+    "DESKTOP_SESSION",
+    "DISPLAY",
+    "QT_QPA_PLATFORMTHEME",
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_SESSION_DESKTOP",
+    "XDG_SESSION_TYPE",
+];
 
 pub(super) fn preserves_predecessor_kms_state(
     runtime_limit: RuntimeLimit,
@@ -145,9 +163,94 @@ fn start_systemd_graphical_session(
     change_systemd_graphical_session(connection, "StartUnit", DENIAL_SESSION_TARGET)
 }
 
+/// Withdraws the session-description variables Denial published at startup.
+fn clear_systemd_session_environment(connection: &zbus::blocking::Connection) {
+    let Ok(proxy) = zbus::blocking::Proxy::new(
+        connection,
+        SYSTEMD_DBUS_NAME,
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+    ) else {
+        return;
+    };
+    if let Err(error) = proxy.call::<_, _, ()>("UnsetEnvironment", &(SESSION_ENVIRONMENT_KEYS,)) {
+        debug!(%error, "could not withdraw the Denial session environment");
+    }
+}
+
+fn clear_dbus_session_environment(connection: &zbus::blocking::Connection) {
+    let Ok(proxy) = zbus::blocking::Proxy::new(
+        connection,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    ) else {
+        return;
+    };
+    let cleared = SESSION_ENVIRONMENT_KEYS.map(|name| (name, ""));
+    if let Err(error) = proxy.call::<_, _, ()>("UpdateActivationEnvironment", &(cleared,)) {
+        debug!(%error, "could not withdraw the Denial D-Bus activation environment");
+    }
+}
+
+/// The unit's `ActiveState`, or `None` when the property cannot be read.
+fn unit_active_state(connection: &zbus::blocking::Connection, unit: &str) -> Option<String> {
+    let proxy = zbus::blocking::Proxy::new(
+        connection,
+        SYSTEMD_DBUS_NAME,
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+    )
+    .ok()?;
+    let path: zbus::zvariant::OwnedObjectPath = proxy.call("GetUnit", &(unit,)).ok()?;
+    let unit_proxy = zbus::blocking::Proxy::new(
+        connection,
+        SYSTEMD_DBUS_NAME,
+        path.as_str(),
+        "org.freedesktop.systemd1.Unit",
+    )
+    .ok()?;
+    unit_proxy.get_property::<String>("ActiveState").ok()
+}
+
+/// Stops the shared graphical-session target and waits until it is gone.
+///
+/// `graphical-session.target` is a singleton with `RefuseManualStart=yes`. A
+/// fast Denial -> Plasma relogin reuses the running systemd user manager, so
+/// leaving this target active (with Denial's units still bound to it) makes the
+/// next session's `plasma-workspace-wayland.target` dependencies appear already
+/// satisfied; KDE init and the portals then time out against a dead
+/// `WAYLAND_DISPLAY` and the VT stays black. Stopping the target and waiting for
+/// `inactive` guarantees the next session establishes the target from scratch.
+fn stop_and_wait_systemd_graphical_session(
+    connection: &zbus::blocking::Connection,
+) -> Result<(), zbus::Error> {
+    // Stop Denial's own target first so its bound dependencies release before
+    // the shared singleton is torn down.
+    let _ = change_systemd_graphical_session(connection, "StopUnit", DENIAL_SESSION_TARGET);
+    let _ = change_systemd_graphical_session(connection, "StopUnit", GRAPHICAL_SESSION_TARGET);
+
+    let deadline = Instant::now() + SESSION_STOP_TIMEOUT;
+    loop {
+        match unit_active_state(connection, GRAPHICAL_SESSION_TARGET).as_deref() {
+            // A missing or inactive unit both mean the singleton has released.
+            None | Some("inactive") | Some("failed") => return Ok(()),
+            Some(_) if Instant::now() >= deadline => {
+                return Err(zbus::Error::Failure(format!(
+                    "{GRAPHICAL_SESSION_TARGET} did not stop within {}s",
+                    SESSION_STOP_TIMEOUT.as_secs()
+                )));
+            }
+            Some(_) => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
+}
+
 pub(super) fn stop_systemd_graphical_session() -> Result<(), Box<dyn Error>> {
     let connection = zbus::blocking::Connection::session()?;
-    let _job = change_systemd_graphical_session(&connection, "StopUnit", GRAPHICAL_SESSION_TARGET)?;
+    stop_and_wait_systemd_graphical_session(&connection)?;
+    clear_systemd_session_environment(&connection);
+    clear_dbus_session_environment(&connection);
     Ok(())
 }
 
@@ -223,5 +326,32 @@ mod tests {
             without_xwayland.get("WAYLAND_DISPLAY").map(String::as_str),
             Some("wayland-7")
         );
+    }
+
+    #[test]
+    fn teardown_withdraws_every_published_session_variable() {
+        // The environment Denial publishes at startup and the keys it withdraws
+        // at teardown must stay in lockstep. A published key that is not
+        // cleared leaks this compositor's session description into the next
+        // session sharing the systemd user manager.
+        let published = session_activation_environment(
+            OsStr::new("wayland-7"),
+            Some(OsStr::new(":3")),
+            Some(OsStr::new("/run/denial.sock")),
+            None,
+            true,
+        )
+        .unwrap();
+        for key in published.keys() {
+            // DENIAL_SOCKET names this process's control socket and is not a
+            // desktop-session descriptor; everything else must be withdrawn.
+            if *key == "DENIAL_SOCKET" {
+                continue;
+            }
+            assert!(
+                SESSION_ENVIRONMENT_KEYS.contains(key),
+                "{key} is published but never withdrawn on teardown"
+            );
+        }
     }
 }

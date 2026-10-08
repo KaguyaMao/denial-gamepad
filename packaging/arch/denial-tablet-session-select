@@ -1,0 +1,256 @@
+#!/bin/bash
+# denial-tablet-session-select — 在 Plasma / Gamescope / Denial 平板桌面之间切换
+# 对标 steamos-session-select：先写显示管理器下次自动登录的会话，再退出当前
+# 会话，由显示管理器接着自动进入目标会话。
+#
+# 用法: denial-tablet-session-select <denial|gamepad|gamescope|plasma>
+set -e
+
+SET_SESSION="/usr/lib/steamos/steam-set-session"
+POLKIT_AGENT_BIN="${POLKIT_AGENT_BIN:-/usr/lib/polkit-kde-authentication-agent-1}"
+LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/denial-session-select.log"
+
+# Launched applications inherit null stdio from the compositor, so without
+# this log a tap that dies mid-script is indistinguishable from a tap that
+# never spawned. Keep it small and best-effort: logging must never break the
+# session switch itself.
+log_step() {
+  local status=$?
+  local line
+  line="$(date '+%F %T') [status=$status] $*"
+  if [[ -f "$LOG_FILE" ]]; then
+    local size
+    size="$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)"
+    if [[ "$size" -gt 102400 ]]; then
+      tail -n 200 "$LOG_FILE" >"$LOG_FILE.tmp" 2>/dev/null && \
+        mv -f "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null || true
+    fi
+  fi
+  printf '%s\n' "$line" >>"$LOG_FILE" 2>/dev/null || true
+}
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") <mode>
+
+Modes:
+  denial      进入 Denial 平板桌面（desktop shell）
+  gamepad     进入 Denial 手柄桌面（gamepad profile，全屏触摸手势）
+  gamescope   返回游戏模式（Steam 游戏会话）
+  plasma      进入 Plasma 桌面模式（KDE）
+
+行为与 Plasma 下的“返回游戏模式”(steamos-session-select)一致：
+设置下次自动登录的会话后退出当前会话，由显示管理器接管。
+EOF
+  exit 1
+}
+
+# Ask the Denial compositor to exit so the login session ends the way a normal
+# desktop logout does. Returns non-zero when no compositor can be found or it
+# does not exit in time, so the caller can fall back to loginctl.
+terminate_denial_compositor() {
+  local pid
+  # Match the process name exactly; a full command-line match could hit this
+  # script's own invocation.
+  pid="$(pgrep -x deniald 2>/dev/null | head -n 1)"
+  if [[ -z "$pid" ]]; then
+    log_step 'no deniald process found'
+    return 1
+  fi
+  log_step "signalling deniald pid=$pid with SIGTERM"
+  if ! kill -TERM "$pid" 2>/dev/null; then
+    log_step "failed to signal deniald pid=$pid"
+    return 1
+  fi
+  # Wait (bounded) for the compositor to release DRM master and exit before the
+  # display manager takes over the VT.
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 0.1
+    waited=$((waited + 1))
+    if (( waited >= 50 )); then
+      log_step "deniald pid=$pid did not exit within 5s"
+      return 1
+    fi
+  done
+  return 0
+}
+
+logout_current() {
+  # Denial can still see KDE's user-session D-Bus services after a fast
+  # Plasma -> Denial relogin. Identify the actual shell before probing qdbus;
+  # the presence of a KDE service is not evidence that this is a Plasma login.
+  if in_denial; then
+    # Denial owns the login session through deniald. Terminating the session
+    # scope directly (loginctl terminate-session) races plasmalogin: the
+    # display-manager auth helper receives SIGHUP and then cannot take control
+    # of the VT, so the next session starts on a black screen with only a
+    # cursor. Ask the compositor to shut down instead; its SIGTERM handler
+    # releases DRM master and the session launcher exits on its own, so
+    # plasmalogin performs the same clean relogin it uses after a Plasma logout.
+    log_step "logout branch: denial compositor shutdown (XDG_SESSION_ID=${XDG_SESSION_ID:-unset} USER=${USER:-unset})"
+    if terminate_denial_compositor; then
+      log_step 'denial compositor exiting; display manager will relogin'
+      return 0
+    fi
+    log_step 'compositor shutdown unavailable; falling back to loginctl'
+    if [[ -n "${XDG_SESSION_ID:-}" ]]; then
+      if loginctl terminate-session "$XDG_SESSION_ID"; then
+        log_step 'loginctl terminate-session accepted'
+        return 0
+      fi
+      log_step 'loginctl terminate-session FAILED'
+    elif [[ -n "${USER:-}" ]]; then
+      if loginctl terminate-user "$USER"; then
+        log_step 'loginctl terminate-user accepted'
+        return 0
+      fi
+      log_step 'loginctl terminate-user FAILED'
+    else
+      log_step 'no session identity available for loginctl'
+    fi
+    notify_fail \
+      '注销失败' \
+      '会话配置已写入，但无法结束当前会话。请手动注销一次，显示管理器会进入目标会话。'
+    exit 1
+  fi
+
+  # Gamescope 会话内：关掉 steam 并停掉 gamescope target，回到显示管理器
+  if [[ -n "${XDG_RUNTIME_DIR:-}" && -e "$XDG_RUNTIME_DIR/gamescope-environment" ]]; then
+    log_step 'logout branch: gamescope session'
+    steam -shutdown 2>/dev/null || true
+    systemctl --user stop gamescope-session.target
+    return 0
+  fi
+  # Plasma 桌面：走 KDE 注销（和 steamos-session-select gamescope 同一路）
+  if command -v qdbus6 >/dev/null 2>&1 && qdbus6 org.kde.Shutdown /Shutdown >/dev/null 2>&1; then
+    log_step 'logout branch: plasma qdbus logout'
+    qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout
+    return 0
+  fi
+  # 其他会话：结束当前登录会话，显示管理器会按刚写好的自动登录
+  # 配置进入目标会话。注意 set -e：上面的 pkexec 若鉴权失败会直接退出，
+  # 不会走到这里，避免会话配置没写成功就注销到错误的会话。
+  log_step "logout branch: loginctl (XDG_SESSION_ID=${XDG_SESSION_ID:-unset} USER=${USER:-unset})"
+  if [[ -n "${XDG_SESSION_ID:-}" ]]; then
+    if loginctl terminate-session "$XDG_SESSION_ID"; then
+      log_step 'loginctl terminate-session accepted'
+      return 0
+    fi
+    log_step 'loginctl terminate-session FAILED'
+  elif [[ -n "${USER:-}" ]]; then
+    if loginctl terminate-user "$USER"; then
+      log_step 'loginctl terminate-user accepted'
+      return 0
+    fi
+    log_step 'loginctl terminate-user FAILED'
+  else
+    log_step 'no session identity available for loginctl'
+  fi
+  notify_fail \
+    '注销失败' \
+    '会话配置已写入，但无法结束当前会话。请手动注销一次，显示管理器会进入目标会话。'
+  exit 1
+}
+
+[[ -x "$SET_SESSION" ]] \
+  || { printf '%s: missing %s (SteamOS-style session helper not installed)\n' "$(basename "$0")" "$SET_SESSION" >&2; exit 1; }
+
+# Show failures instead of failing silently. The launcher entry that calls
+# this script produces a windowless launch: if pkexec cannot authenticate,
+# the user would otherwise tap the icon and see nothing happen.
+notify_fail() {
+  local title="$1" message="$2"
+  if [[ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]]; then
+    if command -v kdialog >/dev/null 2>&1; then
+      kdialog --sorry "$message" --title "$title" 2>/dev/null || true
+      return 0
+    fi
+    if command -v zenity >/dev/null 2>&1; then
+      zenity --error --title="$title" --text="$message" --width=480 \
+        2>/dev/null || true
+      return 0
+    fi
+  fi
+  printf '%s: %s\n' "$title" "$message" >&2
+}
+
+# The systemd autostart unit set is generated once per user-manager lifetime,
+# so after a fast Plasma -> Denial relogin it can still reflect the previous
+# session and the Denial-only agent entry may be missing. Start the agent on
+# demand instead of depending on that unit: without an agent pkexec fails
+# silently and the launcher icon appears to do nothing.
+ensure_polkit_agent() {
+  # Match by process name: a full-command-line match could hit our own
+  # invocation when the override travels on the command line.
+  if pgrep -x "$(basename "$POLKIT_AGENT_BIN")" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -x "$POLKIT_AGENT_BIN" ]]; then
+    "$POLKIT_AGENT_BIN" >/dev/null 2>&1 &
+    sleep 1
+  fi
+}
+
+# Write the next autologin session. On authentication failure report it
+# visibly and stop before logging out, so a failed write can never drop the
+# user into the wrong session.
+set_session() {
+  if pkexec "$SET_SESSION" "$1"; then
+    log_step "set_session ok: $1"
+    return 0
+  fi
+  log_step "set_session FAILED: $1"
+  notify_fail \
+    '会话切换失败' \
+    "未能写入自动登录配置（$1），已取消注销，当前会话不受影响。"
+  exit 1
+}
+
+log_step "start mode=${1:-<empty>} desktop=${XDG_CURRENT_DESKTOP:-unset}"
+ensure_polkit_agent
+
+# In a Denial session there is no KDE shutdown service and Steam is not the
+# session owner, so delegating to steamos-session-select would fail (gamescope
+# mode) or start the Steam client just to stop it without ever logging out
+# (plasma mode). From Denial always use our own path below: same privileged
+# session-set step, then end this login session directly.
+in_denial() {
+  local value
+  for value in \
+    "${XDG_CURRENT_DESKTOP:-}" \
+    "${XDG_SESSION_DESKTOP:-}" \
+    "${DESKTOP_SESSION:-}" \
+    "${DENIAL_SHELL_PROFILE:-}"; do
+    value="${value,,}"
+    case "$value" in
+      *denial*|*gamepad*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+case "${1:-}" in
+  denial|tablet|desktop)
+    set_session denial-tablet.desktop
+    logout_current;;
+  gamepad)
+    gamepad_session="${2:-denial-gamepad.desktop}"
+    [[ "$gamepad_session" =~ ^[A-Za-z0-9._-]+\.desktop$ ]] \
+      || { printf '%s: invalid gamepad session id: %s\n' "$(basename "$0")" "$gamepad_session" >&2; exit 1; }
+    set_session "$gamepad_session"
+    logout_current;;
+  gamescope)
+    if ! in_denial && command -v steamos-session-select >/dev/null 2>&1; then
+      exec steamos-session-select gamescope
+    fi
+    set_session gamescope-session.desktop
+    logout_current;;
+  plasma|kde)
+    if ! in_denial && command -v steamos-session-select >/dev/null 2>&1; then
+      exec steamos-session-select plasma
+    fi
+    set_session plasma.desktop
+    logout_current;;
+  *) usage;;
+esac

@@ -299,8 +299,8 @@ fi
 
 shell_profile="${DENIAL_SHELL_PROFILE-${DENIA_SHELL_PROFILE-desktop}}"
 case "$shell_profile" in
-  mobile | desktop) ;;
-  *) die "DENIAL_SHELL_PROFILE must be mobile or desktop, got: $shell_profile" ;;
+  mobile | desktop | gamepad) ;;
+  *) die "DENIAL_SHELL_PROFILE must be mobile, desktop, or gamepad, got: $shell_profile" ;;
 esac
 export DENIAL_SHELL_PROFILE="$shell_profile"
 export DENIA_SHELL_PROFILE="$shell_profile"

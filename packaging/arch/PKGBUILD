@@ -68,6 +68,11 @@ source=(
   "denial-suspend-mode::file://$startdir/../denial-suspend-mode"
   'denial.desktop'
   'dev.denial.Settings.desktop'
+  'denial-tablet-session-select'
+  'denial-gamepad-session'
+  'denial-gamepad.desktop'
+  'denial-gamepad-mode.desktop'
+  'dev.denial.ReturnToPlasma.desktop'
   'denial-portal.service'
   'denial.portal'
   'denial-portals.conf'
@@ -82,6 +87,11 @@ sha256sums=(
   '57c146e3579dd87e12c332a180cca32c17602c823fcd39767a7c737f2688fc71'
   'b4fa50a715fdf36737a72241596c307534cb8665d42b8a947b28df54ab04a0b1'
   'f8acf498ad592dcbf1ee31955264b068c27846f99cded6055a6b64aaf7f4fe07'
+  'c0ffd4fb8b375e79a75ba7ced2b6de0d6238e63a4332088484084e7a3c8edfbf'
+  'f7214c300e96925b3af364a54eb4bedc0ee0b1903f778738052585610acb84f4'
+  'd45ef4cd34a76caa3442bd04f08ccd5819215eeb77e0e16bda1e3f2281cf1c34'
+  '2f157188ff00eed3eb776d0ca4425e365fbd74f2185ac7dc0c1729cc8234da88'
+  '7ec1ba830fbf6039459fd1086c591b13ab5552952178fc39bf7d0ea9396674b4'
   'e0b01affe089a35821475cba9f8e2d982e0abbeafcdfe320fa43411d77c82390'
   'b50dc233ee7e74c6c1fefbcfe03ed79b030ee5bd4369e19ff21199daa8159e0f'
   'e9e98058ed0831f659d811d4901a9f9dd508c7aeaf33decab3fffd5464ace2d1'
@@ -161,6 +171,10 @@ package() {
   install -Dm755 "$control_binary" "$pkgdir/usr/bin/denialctl"
   install -Dm755 "$portal_binary" "$pkgdir/usr/bin/denial-portal"
   install -Dm755 "$srcdir/denial-session" "$pkgdir/usr/bin/denial-session"
+  install -Dm755 "$srcdir/denial-tablet-session-select" \
+    "$pkgdir/usr/bin/denial-tablet-session-select"
+  install -Dm755 "$srcdir/denial-gamepad-session" \
+    "$pkgdir/usr/bin/denial-gamepad-session"
   install -Dm644 "$srcdir/denial-session.target" \
     "$pkgdir/usr/lib/systemd/user/denial-session.target"
   install -Dm644 "$srcdir/denial-portal.service" \
@@ -194,8 +208,14 @@ package() {
 
   install -Dm644 "$srcdir/denial.desktop" \
     "$pkgdir/usr/share/wayland-sessions/denial.desktop"
+  install -Dm644 "$srcdir/denial-gamepad.desktop" \
+    "$pkgdir/usr/share/wayland-sessions/denial-gamepad.desktop"
+  install -Dm644 "$srcdir/denial-gamepad-mode.desktop" \
+    "$pkgdir/usr/share/applications/denial-gamepad-mode.desktop"
   install -Dm644 "$srcdir/dev.denial.Settings.desktop" \
     "$pkgdir/usr/share/applications/dev.denial.Settings.desktop"
+  install -Dm644 "$srcdir/dev.denial.ReturnToPlasma.desktop" \
+    "$pkgdir/usr/share/applications/dev.denial.ReturnToPlasma.desktop"
   install -Dm644 "$repository_root/packaging/dev.denial.Welcome.desktop" \
     "$pkgdir/usr/share/applications/dev.denial.Welcome.desktop"
   install -Dm644 "$srcdir/denial-portals.conf" \

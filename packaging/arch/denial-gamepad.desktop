@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Denial Gamepad Desktop
+Name[en]=Denial Gamepad Desktop
+Comment=Internal Denial gamepad session selected by the application launcher
+Comment[en]=Internal Denial gamepad session selected by the application launcher
+Exec=/usr/bin/denial-gamepad-session
+TryExec=/usr/bin/denial-gamepad-session
+Type=Application
+DesktopNames=Denial
+Keywords=wayland;compositor;flutter;gamepad;

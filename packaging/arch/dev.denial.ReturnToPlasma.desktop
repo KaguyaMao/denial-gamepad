@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=返回 KDE 桌面
+Name[en]=Return to KDE Desktop
+Comment=把下次自动登录设为 Plasma 后注销
+Comment[en]=Set autologin to Plasma, then log out
+Exec=denial-tablet-session-select plasma
+Icon=system-log-out
+Terminal=false
+Type=Application
+StartupNotify=false

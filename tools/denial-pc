@@ -101,6 +101,12 @@ SETTINGS_BINARY="${DENIAL_SETTINGS_BINARY:-$SETTINGS_BUNDLE/denial-settings}"
 SETTINGS_DESKTOP_SOURCE="$ROOT/packaging/arch/dev.denial.Settings.desktop"
 USER_DATA_HOME="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
 SETTINGS_DESKTOP_FILE="${DENIAL_SETTINGS_DESKTOP_FILE:-$USER_DATA_HOME/applications/dev.denial.Settings.desktop}"
+SESSION_SELECT_SOURCE="$ROOT/packaging/arch/denial-tablet-session-select"
+SESSION_SELECT_FILE="${DENIAL_SESSION_SELECT_FILE:-${HOME:?HOME is required}/.local/bin/denial-tablet-session-select}"
+GAMEPAD_DESKTOP_SOURCE="$ROOT/dev/denial-gamepad-mode.desktop.in"
+GAMEPAD_DESKTOP_FILE="${DENIAL_GAMEPAD_DESKTOP_FILE:-$USER_DATA_HOME/applications/denial-gamepad-mode.desktop}"
+GAMEPAD_SESSION_ID="${DENIAL_GAMEPAD_SESSION_ID:-denial-gamepad-test.desktop}"
+TABLET_MODE_MASK_FILE="$USER_DATA_HOME/applications/denial-tablet-mode.desktop"
 ENGINE="${DENIAL_PC_ENGINE:-$BUNDLE/lib/libflutter_engine.so}"
 ICU_DATA="$FLUTTER_SDK_ROOT/bin/cache/artifacts/engine/$DENIAL_FLUTTER_PLATFORM/icudtl.dat"
 PREBUILT_ENGINE_DIR="$ROOT/prebuilt/flutter-engine/$DENIAL_FLUTTER_PLATFORM-release"
@@ -215,6 +221,8 @@ Commands:
   install-session   Add the display-manager entry and Denial portal routing
   install-settings-entry
                     Refresh the local Settings entry for this user
+  install-gamepad-entry
+                    Install the single Plasma gamepad mode launcher entry
   install-engine-test-session
                     Add a separate display-manager entry for the staged engine test
   remove-session    Remove that session and portal configuration
@@ -350,6 +358,66 @@ install_settings_desktop_entry() {
     fi
     rm -f -- "$rendered"
     printf 'Installed %s\n' "$SETTINGS_DESKTOP_FILE"
+}
+
+require_managed_gamepad_desktop_or_absent() {
+    [[ -e "$GAMEPAD_DESKTOP_FILE" || -L "$GAMEPAD_DESKTOP_FILE" ]] \
+        || return 0
+    grep -Fqx 'Name=进入 Denial 手柄桌面' "$GAMEPAD_DESKTOP_FILE" \
+        || die "refusing to replace unrecognized gamepad launcher entry: $GAMEPAD_DESKTOP_FILE"
+}
+
+install_gamepad_entry() {
+    require_file "$SESSION_SELECT_SOURCE"
+    require_file "$GAMEPAD_DESKTOP_SOURCE"
+    [[ "$GAMEPAD_SESSION_ID" =~ ^[A-Za-z0-9._-]+\.desktop$ ]] \
+        || die "invalid gamepad session id: $GAMEPAD_SESSION_ID"
+    [[ -f "/usr/share/wayland-sessions/$GAMEPAD_SESSION_ID" ]] \
+        || die "gamepad session target is missing: /usr/share/wayland-sessions/$GAMEPAD_SESSION_ID"
+    require_managed_gamepad_desktop_or_absent
+
+    install -Dm755 -- "$SESSION_SELECT_SOURCE" "$SESSION_SELECT_FILE"
+
+    local rendered_desktop
+    rendered_desktop="$(mktemp)"
+    sed \
+        -e "s|@SESSION_SELECT@|$SESSION_SELECT_FILE|g" \
+        -e "s|@GAMEPAD_SESSION_ID@|$GAMEPAD_SESSION_ID|g" \
+        "$GAMEPAD_DESKTOP_SOURCE" >"$rendered_desktop"
+    if install -Dm644 -- "$rendered_desktop" "$GAMEPAD_DESKTOP_FILE"; then
+        :
+    else
+        local status=$?
+        rm -f -- "$rendered_desktop"
+        return "$status"
+    fi
+    rm -f -- "$rendered_desktop"
+
+    # Older installs left unmanaged duplicate Denial launchers in the system
+    # application directory. A user-level entry with the same desktop-file ID
+    # takes XDG precedence, so a Hidden mask removes the duplicate from every
+    # menu without needing root.
+    local tablet_mask
+    tablet_mask="$(mktemp)"
+    printf '[Desktop Entry]\nType=Application\nHidden=true\n' >"$tablet_mask"
+    install -Dm644 -- "$tablet_mask" "$TABLET_MODE_MASK_FILE"
+    rm -f -- "$tablet_mask"
+
+    local legacy_guide="$USER_DATA_HOME/applications/denial-tablet-guide.desktop"
+    if [[ -e "$legacy_guide" ]]; then
+        if grep -Fq 'denial-tablet-guide.sh' "$legacy_guide"; then
+            rm -f -- "$legacy_guide"
+            printf 'Removed obsolete %s\n' "$legacy_guide"
+        else
+            printf 'warning  refusing to remove unrecognized entry %s\n' \
+                "$legacy_guide" >&2
+        fi
+    fi
+
+    printf 'Installed the single Plasma launcher entry: %s\n' \
+        "$GAMEPAD_DESKTOP_FILE"
+    printf 'It selects %s and returns through the display manager.\n' \
+        "$GAMEPAD_SESSION_ID"
 }
 
 install_welcome_desktop_entries() {
@@ -1190,8 +1258,8 @@ run_compositor() {
     drm_device="$(resolve_drm_device)"
     local shell_profile="${DENIAL_SHELL_PROFILE-${DENIA_SHELL_PROFILE-desktop}}"
     case "$shell_profile" in
-        mobile | desktop) ;;
-        *) die "DENIAL_SHELL_PROFILE must be mobile or desktop, got: $shell_profile" ;;
+        mobile | desktop | gamepad) ;;
+        *) die "DENIAL_SHELL_PROFILE must be mobile, desktop, or gamepad, got: $shell_profile" ;;
     esac
 
     unset DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE SWAYSOCK I3SOCK
@@ -1749,6 +1817,7 @@ case "${1:-}" in
     doctor) doctor ;;
     install-session) install_session ;;
     install-settings-entry) install_settings_desktop_entry ;;
+    install-gamepad-entry) install_gamepad_entry ;;
     install-welcome-entry) install_welcome_desktop_entries ;;
     install-plugin-manager-entry) install_plugin_manager_desktop_entry ;;
     install-engine-test-session) install_engine_test_session ;;
