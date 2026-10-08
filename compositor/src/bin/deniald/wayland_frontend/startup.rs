@@ -477,6 +477,9 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             gamepad_shell: denial_core::environment::var("DENIAL_SHELL_PROFILE").as_deref()
                 == Ok("gamepad"),
+            #[cfg(not(feature = "flutter"))]
+            gamepad_shell: denial_core::environment::var("DENIAL_SHELL_PROFILE").as_deref()
+                == Ok("gamepad"),
             #[cfg(feature = "flutter")]
             idle_inhibitors,
             #[cfg(feature = "flutter")]

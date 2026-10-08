@@ -607,7 +607,6 @@ pub(super) struct WaylandFrontend {
     mobile_shell: bool,
     /// Touch-first desktop profile: exclusive/split admission, edge resize and
     /// strip overview are enabled for `DENIAL_SHELL_PROFILE=gamepad`.
-    #[cfg(feature = "flutter")]
     gamepad_shell: bool,
     #[cfg(feature = "flutter")]
     idle_inhibitors: IdleInhibitors,

@@ -171,7 +171,6 @@ impl WaylandFrontend {
             && self.window_is_layout_managed(window)
     }
 
-    #[cfg(feature = "flutter")]
     pub(crate) fn gamepad_shell(&self) -> bool {
         self.gamepad_shell
     }
