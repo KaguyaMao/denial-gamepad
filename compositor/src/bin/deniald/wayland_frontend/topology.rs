@@ -175,6 +175,13 @@ impl WaylandFrontend {
     }
 
     pub(crate) fn set_work_area(&mut self, work_area: crate::options::WorkAreaOptions) {
+        // The gamepad profile owns its strip and margin independently of the
+        // stored desktop settings; the shell still publishes the desktop work
+        // area so leaving the profile restores the user's configuration.
+        #[cfg(feature = "flutter")]
+        let work_area = work_area.for_gamepad(self.gamepad_shell);
+        #[cfg(not(feature = "flutter"))]
+        let work_area = work_area;
         if self.work_area == work_area {
             return;
         }

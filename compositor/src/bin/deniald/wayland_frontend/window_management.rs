@@ -1786,7 +1786,7 @@ pub(super) fn minimize_all_toplevels(state: &mut RuntimeState) -> bool {
 }
 
 #[cfg(feature = "flutter")]
-pub(super) fn minimize_toplevel_by_id(state: &mut RuntimeState, window_id: u64) -> bool {
+pub(crate) fn minimize_toplevel_by_id(state: &mut RuntimeState, window_id: u64) -> bool {
     let local = state
         .wayland
         .as_ref()

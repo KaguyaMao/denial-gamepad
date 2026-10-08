@@ -475,6 +475,9 @@ impl WaylandFrontend {
             mobile_shell: denial_core::environment::var("DENIAL_SHELL_PROFILE").as_deref()
                 == Ok("mobile"),
             #[cfg(feature = "flutter")]
+            gamepad_shell: denial_core::environment::var("DENIAL_SHELL_PROFILE").as_deref()
+                == Ok("gamepad"),
+            #[cfg(feature = "flutter")]
             idle_inhibitors,
             #[cfg(feature = "flutter")]
             idle_inhibition_dirty: true,
@@ -487,6 +490,11 @@ impl WaylandFrontend {
             input_method,
             outputs,
             scrolling_layout_axes,
+            #[cfg(feature = "flutter")]
+            work_area: work_area.for_gamepad(
+                denial_core::environment::var("DENIAL_SHELL_PROFILE").as_deref() == Ok("gamepad"),
+            ),
+            #[cfg(not(feature = "flutter"))]
             work_area,
             ticker_output: snapshot.ticker,
             atlas_output,

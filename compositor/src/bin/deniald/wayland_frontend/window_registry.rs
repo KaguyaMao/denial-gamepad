@@ -29,6 +29,10 @@ pub(super) struct WindowRecord {
     pub(super) layout_preview_size: Option<Size<i32, Logical>>,
     pub(super) restore_geometry: Option<Rectangle<i32, Logical>>,
     pub(super) layout_restore_geometry: Option<Rectangle<i32, Logical>>,
+    /// Remembered geometry for a lone gamepad tile that the user resized below
+    /// the full work area. Cleared when the tile joins a split.
+    #[cfg(feature = "flutter")]
+    pub(super) gamepad_single_geometry: Option<Rectangle<i32, Logical>>,
     pub(super) layout_insertion_anchor: Option<ObjectId>,
     pub(super) restored_position: bool,
     pub(super) client_geometry_state_requested: bool,

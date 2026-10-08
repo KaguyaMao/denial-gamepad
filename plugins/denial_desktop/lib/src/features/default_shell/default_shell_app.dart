@@ -67,6 +67,12 @@ class DenialShellApp extends StatelessWidget {
               ? <Widget>[]
               : <Widget>[SystemLevelHudLayer(), NotificationBannerLayer()],
         ),
+        // The touch gamepad profile reuses the desktop scene for now; touch
+        // policy is layered in through the desktop input publisher.
+        gamepad: const DenialShellScene(
+          content: DesktopShell(),
+          overlays: <Widget>[SystemLevelHudLayer(), NotificationBannerLayer()],
+        ),
         pairingSurfaceBuilder: _buildPairingSurface,
         onLocked: _closeFeatureSurfaces,
       ),

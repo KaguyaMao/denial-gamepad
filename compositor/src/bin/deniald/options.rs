@@ -27,6 +27,12 @@ const DEFAULT_SYSTEM_BAR_THICKNESS: f64 = 32.0;
 pub(super) const MAX_SYSTEM_BAR_THICKNESS: f64 = 512.0;
 const DEFAULT_MAXIMIZE_PADDING: f64 = 10.0;
 pub(super) const MAX_MAXIMIZE_PADDING: f64 = 256.0;
+/// Touch Dock strip height for `DENIAL_SHELL_PROFILE=gamepad`.
+pub(super) const GAMEPAD_SYSTEM_BAR_THICKNESS: f64 = 51.0;
+/// Logical pixels kept between a lone gamepad tile and the work-area edges.
+/// The touch shell has no pointer cursor to grab a flush edge, so a visible
+/// margin is what makes the resize border reachable.
+pub(super) const GAMEPAD_WINDOW_MARGIN: f64 = 16.0;
 const SYSTEM_BAR_SPEC_HELP: &str =
     "system bar must use SIDE,THICKNESS[,OUTPUT[+OUTPUT...]] or hidden";
 
@@ -89,6 +95,18 @@ impl Default for WorkAreaOptions {
             system_bar: SystemBarOptions::default(),
             maximize_padding: DEFAULT_MAXIMIZE_PADDING,
         }
+    }
+}
+
+impl WorkAreaOptions {
+    /// Profile-local work-area policy, independent of stored desktop settings.
+    pub(super) fn for_gamepad(mut self, gamepad: bool) -> Self {
+        if gamepad {
+            self.system_bar.side = SystemBarSide::Top;
+            self.system_bar.thickness = GAMEPAD_SYSTEM_BAR_THICKNESS;
+            self.maximize_padding = GAMEPAD_WINDOW_MARGIN;
+        }
+        self
     }
 }
 

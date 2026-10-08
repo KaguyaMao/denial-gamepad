@@ -42,6 +42,11 @@ pub(super) struct TouchWindowTarget {
     pub in_gesture_strip: bool,
     pub in_move_corner: bool,
     pub geometry_locked: bool,
+    /// Touch-first desktop profile. Exclusive/split tiles resize from their
+    /// edges and never free-move or pinch-resize.
+    pub gamepad_shell: bool,
+    /// Resize edges under a gamepad contact, when it landed on a tile border.
+    pub resize_edges: Option<LayoutResizeEdges>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +56,15 @@ pub(super) enum TouchWindowAction {
         phase: WindowPlacementPhase,
         change: WindowPlacementChange,
         geometry: WindowGeometry,
+    },
+    /// Move one gamepad tile edge, which the layout turns into a shared
+    /// boundary adjustment for its siblings.
+    EdgeResize {
+        window_id: u64,
+        phase: WindowPlacementPhase,
+        edges: LayoutResizeEdges,
+        delta_x: f64,
+        delta_y: f64,
     },
     Minimize {
         window_id: u64,
@@ -86,6 +100,15 @@ enum Gesture {
         last_geometry: WindowGeometry,
         started: bool,
         geometry_locked: bool,
+    },
+    /// One-finger drag on a gamepad tile's border.
+    EdgeResize {
+        slot: i32,
+        window_id: u64,
+        origin: Point<f64, Logical>,
+        last: Point<f64, Logical>,
+        edges: LayoutResizeEdges,
+        started: bool,
     },
     PinchCandidate {
         slots: [i32; 2],
@@ -125,7 +148,8 @@ enum Gesture {
 impl Gesture {
     fn window_id(self) -> u64 {
         match self {
-            Self::Move { window_id, .. }
+            Self::EdgeResize { window_id, .. }
+            | Self::Move { window_id, .. }
             | Self::PinchCandidate { window_id, .. }
             | Self::Pinch { window_id, .. }
             | Self::MinimizeSwipe { window_id, .. }
@@ -137,6 +161,9 @@ impl Gesture {
 
     fn includes(self, slot: i32) -> bool {
         match self {
+            Self::EdgeResize {
+                slot: gesture_slot, ..
+            } => gesture_slot == slot,
             Self::Move {
                 slot: gesture_slot, ..
             } => gesture_slot == slot,
@@ -151,6 +178,18 @@ impl Gesture {
 
     fn finish_action(self) -> Option<TouchWindowAction> {
         match self {
+            Self::EdgeResize {
+                window_id,
+                edges,
+                started: true,
+                ..
+            } => Some(TouchWindowAction::EdgeResize {
+                window_id,
+                phase: WindowPlacementPhase::End,
+                edges,
+                delta_x: 0.0,
+                delta_y: 0.0,
+            }),
             Self::Move {
                 window_id,
                 last_geometry,
@@ -201,6 +240,24 @@ impl TouchGestureState {
         let Some(target) = target else {
             return TouchGestureUpdate::default();
         };
+
+        // Gamepad tiles resize from their border. Claim the contact before any
+        // multi-finger or corner gesture so a border drag is never a client tap.
+        if target.gamepad_shell
+            && self.contacts.len() == 1
+            && self.gesture.is_none()
+            && let Some(edges) = target.resize_edges
+        {
+            self.gesture = Some(Gesture::EdgeResize {
+                slot,
+                window_id: target.window_id,
+                origin: position,
+                last: position,
+                edges,
+                started: false,
+            });
+            return TouchGestureUpdate::default();
+        }
 
         if matches!(self.gesture, Some(Gesture::Blocked { window_id }) if window_id == target.window_id)
         {
@@ -305,6 +362,56 @@ impl TouchGestureState {
         };
         contact.position = position;
         let captured = contact.captured;
+
+        if let Some(Gesture::EdgeResize {
+            slot: owner,
+            window_id,
+            origin,
+            last,
+            edges,
+            started,
+        }) = self.gesture
+        {
+            if owner != slot {
+                return TouchGestureUpdate::default();
+            }
+            let travel = position - origin;
+            if !started && travel.x.hypot(travel.y) < MOVE_SLOP {
+                return TouchGestureUpdate::default();
+            }
+            let captured_slots = self.capture_slots(&[slot]);
+            let step = position - last;
+            let mut actions = Vec::new();
+            if !started {
+                actions.push(TouchWindowAction::EdgeResize {
+                    window_id,
+                    phase: WindowPlacementPhase::Begin,
+                    edges,
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                });
+            }
+            actions.push(TouchWindowAction::EdgeResize {
+                window_id,
+                phase: WindowPlacementPhase::Update,
+                edges,
+                delta_x: step.x,
+                delta_y: step.y,
+            });
+            self.gesture = Some(Gesture::EdgeResize {
+                slot,
+                window_id,
+                origin,
+                last: position,
+                edges,
+                started: true,
+            });
+            return TouchGestureUpdate {
+                consume: true,
+                captured_slots,
+                actions,
+            };
+        }
 
         if matches!(
             self.gesture,
@@ -919,6 +1026,13 @@ pub(super) fn apply_actions(
                 change,
                 geometry,
             } => apply_placement(state, window_id, phase, change, geometry),
+            TouchWindowAction::EdgeResize {
+                window_id,
+                phase,
+                edges,
+                delta_x,
+                delta_y,
+            } => apply_edge_resize(state, window_id, phase, edges, delta_x, delta_y),
             TouchWindowAction::Minimize { window_id } => {
                 window_management::minimize_toplevel_by_id(state, window_id);
             }
@@ -1167,6 +1281,99 @@ fn layout_pinch_delta(
     }
 }
 
+/// Hit-test both sides of a real tile border, including the margin exposed
+/// between the window and the work-area edge. Returns `None` when the contact
+/// is inside the window body (a client tap) rather than on a border band.
+pub(super) fn gamepad_resize_edges(
+    position: Point<f64, Logical>,
+    geometry: Rectangle<i32, Logical>,
+) -> Option<LayoutResizeEdges> {
+    const BAND: f64 = 16.0;
+    let left = f64::from(geometry.loc.x);
+    let top = f64::from(geometry.loc.y);
+    let right = left + f64::from(geometry.size.w);
+    let bottom = top + f64::from(geometry.size.h);
+    if position.x < left - BAND
+        || position.x > right + BAND
+        || position.y < top - BAND
+        || position.y > bottom + BAND
+    {
+        return None;
+    }
+    let edges = LayoutResizeEdges {
+        left: (position.x - left).abs() <= BAND,
+        right: (position.x - right).abs() <= BAND,
+        top: (position.y - top).abs() <= BAND,
+        bottom: (position.y - bottom).abs() <= BAND,
+    };
+    (edges.left || edges.right || edges.top || edges.bottom).then_some(edges)
+}
+
+/// Apply one gamepad tile edge drag. Splits share their boundary through the
+/// layout; a squeezed-out sibling is backgrounded by the caller's resize path.
+fn apply_edge_resize(
+    state: &mut RuntimeState,
+    window_id: u64,
+    phase: WindowPlacementPhase,
+    edges: LayoutResizeEdges,
+    delta_x: f64,
+    delta_y: f64,
+) {
+    let Some(window) = state
+        .wayland
+        .as_ref()
+        .and_then(|frontend| frontend.window_for_id(window_id))
+    else {
+        return;
+    };
+    let managed = state.wayland.as_ref().is_some_and(|frontend| {
+        frontend.gamepad_shell() && frontend.window_is_layout_managed(&window)
+    });
+    if !managed {
+        return;
+    }
+    if phase == WindowPlacementPhase::Begin {
+        release_geometry_constraints(state, &window);
+        window_management::activate_window(state, &window, SERIAL_COUNTER.next_serial());
+    }
+    if phase == WindowPlacementPhase::Update {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .resize_layout_window(&window, edges, delta_x, delta_y);
+        // A resize that squeezes a sibling pane out of existence backgrounds
+        // that sibling and hands its space to the resized window.
+        let squeezed = state
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .layout_siblings_squeezed_out(&window);
+        for squeezed_id in squeezed {
+            if squeezed_id != window_id {
+                window_management::minimize_toplevel_by_id(state, squeezed_id);
+            }
+        }
+    }
+    // Read the placements after any evictions so the collapsed layout is the
+    // one published, not a stale pre-collapse vector.
+    let placements = state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .layout_window_geometries(&window);
+    for (affected, geometry) in placements {
+        window_management::queue_transient_window_placement(
+            state,
+            &affected,
+            geometry,
+            phase,
+            WindowPlacementChange::Resize,
+        );
+    }
+    state.scene_sync.mark_dirty();
+}
+
 fn release_geometry_constraints(state: &mut RuntimeState, window: &Window) -> bool {
     let client_cleared = window_management::clear_client_geometry_constraints(window);
     let root = state
@@ -1282,6 +1489,8 @@ mod tests {
             in_gesture_strip: false,
             in_move_corner,
             geometry_locked,
+            gamepad_shell: false,
+            resize_edges: None,
         }
     }
 

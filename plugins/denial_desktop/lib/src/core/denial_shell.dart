@@ -49,6 +49,7 @@ class DenialShell extends ConsumerWidget {
     super.key,
     required this.mobile,
     required this.desktop,
+    required this.gamepad,
     this.pairingSurfaceBuilder,
     this.onLocked,
     this.desktopWorkArea,
@@ -56,6 +57,7 @@ class DenialShell extends ConsumerWidget {
 
   final DenialShellScene mobile;
   final DenialShellScene desktop;
+  final DenialShellScene gamepad;
   final DenialPairingSurfaceBuilder? pairingSurfaceBuilder;
   final DenialShellEffect? onLocked;
   final ShellWorkArea? desktopWorkArea;
@@ -117,9 +119,11 @@ class DenialShell extends ConsumerWidget {
     );
     final scene = _ProfileScene(
       profile: effectiveProfile,
-      scene: effectiveProfile == ReferenceShellProfile.mobile
-          ? mobile
-          : desktop,
+      scene: switch (effectiveProfile) {
+        ReferenceShellProfile.mobile => mobile,
+        ReferenceShellProfile.gamepad => gamepad,
+        ReferenceShellProfile.desktop => desktop,
+      },
     );
     final fingerprint = ref.watch(fingerprintSceneProvider);
     final locked = ref.watch(
@@ -130,9 +134,9 @@ class DenialShell extends ConsumerWidget {
       locked: locked,
       onLaidOut: ref.read(fingerprintSceneProvider.notifier).laidOut,
       child: ShellCursorHost(
-        theme: effectiveProfile == ReferenceShellProfile.desktop
-            ? cursorTheme
-            : ShellCursorThemes.bibataModernIce,
+        theme: effectiveProfile == ReferenceShellProfile.mobile
+            ? ShellCursorThemes.bibataModernIce
+            : cursorTheme,
         platformCursorShapes: bridge.cursorShapes,
         platformCursorStates: bridge.cursorStates,
         platformCursorPositions: bridge.cursorPositions,
@@ -149,9 +153,9 @@ class DenialShell extends ConsumerWidget {
     );
 
     return ShellRuntimeBindings(
-      workArea: effectiveProfile == ReferenceShellProfile.desktop
-          ? desktopWorkArea
-          : null,
+      workArea: effectiveProfile == ReferenceShellProfile.mobile
+          ? null
+          : desktopWorkArea,
       pairingSurfaceBuilder: pairingSurfaceBuilder,
       onLocked: onLocked,
       child: AnimatedShellTheme(
@@ -178,8 +182,8 @@ class _ProfileScene extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return switch (profile) {
-      ReferenceShellProfile.mobile => InputLayoutPublisher(
+    if (profile == ReferenceShellProfile.mobile) {
+      return InputLayoutPublisher(
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -195,31 +199,34 @@ class _ProfileScene extends StatelessWidget {
             const MobileSystemKeyboardLayer(),
           ],
         ),
-      ),
-      ReferenceShellProfile.desktop => DesktopInputLayoutPublisher(
-        child: ShellSecureStage(
-          useConfiguredLockAnimation: true,
-          scene: Stack(
-            fit: StackFit.expand,
-            children: [
-              ShellPopupHost(
-                // Keep desktop feature popups inside the scene's paint plane.
-                // The screenshot selection layer remains above this overlay,
-                // so its frozen texture includes open menus while its controls
-                // paint and receive input above them.
-                child: ShellOverlayHost(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [scene.content, ...scene.overlays],
-                  ),
+      );
+    }
+    // The gamepad profile reuses the desktop presentation scene; the touch
+    // adaptations (exclusive/split policy, strip overview, dock) are layered in
+    // through the desktop publisher.
+    return DesktopInputLayoutPublisher(
+      child: ShellSecureStage(
+        useConfiguredLockAnimation: true,
+        scene: Stack(
+          fit: StackFit.expand,
+          children: [
+            ShellPopupHost(
+              // Keep desktop feature popups inside the scene's paint plane.
+              // The screenshot selection layer remains above this overlay,
+              // so its frozen texture includes open menus while its controls
+              // paint and receive input above them.
+              child: ShellOverlayHost(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [scene.content, ...scene.overlays],
                 ),
               ),
-              const ScreenshotSelectionLayer(),
-            ],
-          ),
+            ),
+            const ScreenshotSelectionLayer(),
+          ],
         ),
       ),
-    };
+    );
   }
 }
 

@@ -205,6 +205,8 @@ pub(crate) use window_layout_adapter::LayoutDropTarget;
 #[path = "wayland_frontend/window_management.rs"]
 mod window_management;
 #[cfg(feature = "flutter")]
+pub(crate) use window_management::minimize_toplevel_by_id;
+#[cfg(feature = "flutter")]
 #[path = "wayland_frontend/window_outputs.rs"]
 mod window_outputs;
 #[cfg(feature = "flutter")]
@@ -603,6 +605,10 @@ pub(super) struct WaylandFrontend {
     frame_timeline: frame_timeline::FrameTimelineManager,
     #[cfg(feature = "flutter")]
     mobile_shell: bool,
+    /// Touch-first desktop profile: exclusive/split admission, edge resize and
+    /// strip overview are enabled for `DENIAL_SHELL_PROFILE=gamepad`.
+    #[cfg(feature = "flutter")]
+    gamepad_shell: bool,
     #[cfg(feature = "flutter")]
     idle_inhibitors: IdleInhibitors,
     #[cfg(feature = "flutter")]

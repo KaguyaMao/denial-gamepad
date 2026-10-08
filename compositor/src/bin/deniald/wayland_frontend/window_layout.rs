@@ -172,6 +172,11 @@ impl WaylandFrontend {
     }
 
     #[cfg(feature = "flutter")]
+    pub(crate) fn gamepad_shell(&self) -> bool {
+        self.gamepad_shell
+    }
+
+    #[cfg(feature = "flutter")]
     pub(super) fn scrolling_resize_axis_for_window(&self, window: &Window) -> Option<LayoutAxis> {
         if self.window_layout.kind() != WindowLayoutKind::Scrolling {
             return None;
@@ -664,6 +669,13 @@ impl WaylandFrontend {
         delta_x: f64,
         delta_y: f64,
     ) -> Vec<(Window, Rectangle<i32, Logical>)> {
+        #[cfg(feature = "flutter")]
+        if self.gamepad_shell
+            && let Some(changed) =
+                self.resize_gamepad_single_window(window, edges, delta_x, delta_y)
+        {
+            return changed;
+        }
         self.resize_layout_window_with(window, |layout, window, work_area, gap| {
             layout.resize(LayoutResizeRequest {
                 window,
@@ -674,6 +686,122 @@ impl WaylandFrontend {
                 edges,
             })
         })
+    }
+
+    /// Free-resize the lone gamepad tile, remembering its geometry so a later
+    /// application can tile into the space it leaves. Returns `None` when the
+    /// window is not a single gamepad tile, so the shared split path runs.
+    #[cfg(feature = "flutter")]
+    fn resize_gamepad_single_window(
+        &mut self,
+        window: &Window,
+        edges: LayoutResizeEdges,
+        delta_x: f64,
+        delta_y: f64,
+    ) -> Option<Vec<(Window, Rectangle<i32, Logical>)>> {
+        let window_id = self.window_root_surface(window).map(|root| root.id())?;
+        let layout_space = self.window_layout.space_for(&window_id)?;
+        let output = self
+            .outputs
+            .iter()
+            .find(|output| output.id == layout_space.output)?;
+        let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
+        let gap = self.layout_gap();
+        if self
+            .window_layout
+            .arrange(layout_space, work_area, gap)
+            .len()
+            != 1
+        {
+            return None;
+        }
+        let previous = self.window_geometry_target(window);
+        let border = if super::shell_draws_server_frame(window) {
+            super::SHELL_FRAME_BORDER
+        } else {
+            0
+        };
+        let frame = Rectangle::new(
+            Point::from((previous.loc.x - border, previous.loc.y - border)),
+            Size::from((previous.size.w + border * 2, previous.size.h + border * 2)),
+        );
+        let resized = resize_gamepad_single_frame(frame, work_area, edges, delta_x, delta_y);
+        if resized == frame {
+            return Some(Vec::new());
+        }
+        self.ensure_window_record_for_surface(&window_id)
+            .expect("managed window has no stable id")
+            .gamepad_single_geometry = Some(resized);
+        self.arrange_layout_windows();
+        Some(vec![(window.clone(), self.window_geometry_target(window))])
+    }
+
+    /// Touch admission. When the target workspace still has free space the new
+    /// window tiles in beside the existing ones; once the workspace is full the
+    /// new window replaces every existing one and owns the whole work area.
+    #[cfg(feature = "flutter")]
+    fn admit_gamepad_window(&mut self, window: &ObjectId, space: LayoutSpace) {
+        let placements = self
+            .current_layout_placements()
+            .into_iter()
+            .filter(|placement| self.window_layout.space_for(&placement.window) == Some(space))
+            .collect::<Vec<_>>();
+        let existing = placements
+            .iter()
+            .map(|placement| placement.window.clone())
+            .filter(|candidate| candidate != window)
+            .collect::<Vec<_>>();
+        if existing.is_empty() {
+            return;
+        }
+        let Some(output) = self.outputs.iter().find(|output| output.id == space.output) else {
+            return;
+        };
+        let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
+        if gamepad_workspace_has_free_space(&placements, work_area) {
+            return;
+        }
+        for displaced in existing {
+            let Some(previous) = self.window_for_layout_id(&displaced) else {
+                continue;
+            };
+            if let Some(managed) = ManagedWindow::new(&previous) {
+                managed.prepare_minimized(true);
+            }
+            self.set_surface_minimized(displaced, true);
+            self.detach_window_from_layout(&previous, false);
+        }
+    }
+
+    /// Sibling tiles squeezed to nothing by a resize in `window`'s layout space.
+    ///
+    /// The touch shell presents one workspace. Dragging a pane's border until a
+    /// neighbour has no room left evicts that neighbour into the background
+    /// instead of leaving it as a sliver. Callers minimize each returned window;
+    /// the layout then collapses the freed node.
+    #[cfg(feature = "flutter")]
+    pub(crate) fn layout_siblings_squeezed_out(&self, window: &Window) -> Vec<u64> {
+        let Some(window_id) = self.window_root_surface(window).map(|root| root.id()) else {
+            return Vec::new();
+        };
+        let Some(space) = self.window_layout.space_for(&window_id) else {
+            return Vec::new();
+        };
+        let Some(output) = self.outputs.iter().find(|output| output.id == space.output) else {
+            return Vec::new();
+        };
+        let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
+        let extent = i64::from(work_area.size.w).max(i64::from(work_area.size.h));
+        let threshold = (extent / 20).max(24);
+        self.current_layout_placements()
+            .into_iter()
+            .filter(|placement| self.window_layout.space_for(&placement.window) == Some(space))
+            .filter(|placement| {
+                let geometry = placement.geometry;
+                i64::from(geometry.size.w) <= threshold || i64::from(geometry.size.h) <= threshold
+            })
+            .filter_map(|placement| self.surface_ids.get(&placement.window).copied())
+            .collect()
     }
 
     fn resize_layout_window_with(
@@ -895,6 +1023,14 @@ impl WaylandFrontend {
     /// implementation. Floating rectangles survive managed-layout switches and
     /// are restored only when returning to stacking.
     pub(crate) fn set_window_layout_kind(&mut self, kind: WindowLayoutKind) -> bool {
+        #[cfg(feature = "flutter")]
+        let kind = if self.gamepad_shell {
+            // The touch shell's exclusive/split admission and edge resize are
+            // written against Dwindle's shared-boundary splits.
+            WindowLayoutKind::Dwindle
+        } else {
+            kind
+        };
         if self.window_layout.kind() == kind {
             return false;
         }
@@ -979,6 +1115,10 @@ impl WaylandFrontend {
             self.reconcile_workspace_assignment(stable_id, physical_output, false);
         }
         let space = self.layout_space_for_window(window, physical_output);
+        #[cfg(feature = "flutter")]
+        if self.gamepad_shell {
+            self.admit_gamepad_window(&window_id, space);
+        }
         if has_visible_size(restore) {
             self.ensure_window_record_for_surface(&window_id)
                 .expect("managed window has no stable id")
@@ -1200,6 +1340,12 @@ impl WaylandFrontend {
     }
 
     fn layout_minimum_size(&self, window: &Window) -> Size<i32, Logical> {
+        #[cfg(feature = "flutter")]
+        if self.gamepad_shell {
+            // A client's fixed/minimum size cannot force overlapping rows.
+            let _ = window;
+            return Size::from((64, 64));
+        }
         let minimum = self.window_size_constraints(window).0;
         #[cfg(feature = "flutter")]
         let server_side_decorated = super::shell_draws_server_frame(window);
@@ -1263,11 +1409,25 @@ impl WaylandFrontend {
                 let work_area =
                     self.maximize_work_area(Some(&output.output), output.logical_geometry);
                 (1..=self.layout_workspace_count()).flat_map(move |workspace| {
-                    self.window_layout.arrange(
+                    let mut placements = self.window_layout.arrange(
                         LayoutSpace::new(output.id, workspace),
                         work_area,
                         gap,
-                    )
+                    );
+                    #[cfg(feature = "flutter")]
+                    if self.gamepad_shell && placements.len() == 1 {
+                        // A lone tile may have been resized below the full work
+                        // area; present its remembered geometry so the shell can
+                        // tile a new window into the free space.
+                        let placement = &mut placements[0];
+                        if let Some(saved) = self
+                            .window_record_for_surface(&placement.window)
+                            .and_then(|record| record.gamepad_single_geometry)
+                        {
+                            placement.geometry = fit_gamepad_single_frame(saved, work_area);
+                        }
+                    }
+                    placements
                 })
             })
             .collect()
@@ -1363,6 +1523,11 @@ impl WaylandFrontend {
         let Some(facts) = ManagedWindow::new(window).map(|window| window.facts()) else {
             return false;
         };
+        #[cfg(feature = "flutter")]
+        if self.gamepad_shell {
+            // Dialog toplevels are tiles too; protocol popups remain transient.
+            return root.is_alive() && !minimized && !facts.override_redirect;
+        }
         let already_managed = self.window_layout.contains(&root.id());
         LayoutWindowProperties {
             alive: root.is_alive(),
@@ -1443,6 +1608,13 @@ impl WaylandFrontend {
     }
 
     fn window_has_constrained_state(&self, window: &Window) -> bool {
+        #[cfg(feature = "flutter")]
+        if self.gamepad_shell {
+            // The touch shell owns geometry for every eligible toplevel; a
+            // client fullscreen request does not remove its tile.
+            let _ = window;
+            return false;
+        }
         #[cfg(feature = "flutter")]
         {
             let root = self.window_root_surface(window);
@@ -1791,6 +1963,87 @@ fn visible_stacking_restore(
     saved
 }
 
+/// True when the gamepad workspace's visible tiles leave usable free space, so
+/// the next application tiles in instead of replacing the whole workspace.
+/// Dwindle tiles never overlap, so comparing summed areas to the work area is
+/// sufficient; a small tolerance absorbs rounding.
+#[cfg(feature = "flutter")]
+fn gamepad_workspace_has_free_space<Id>(
+    placements: &[LayoutPlacement<Id>],
+    work_area: Rectangle<i32, Logical>,
+) -> bool {
+    let covered = placements
+        .iter()
+        .map(|placement| {
+            let size = placement.geometry.size;
+            i64::from(size.w.max(0)) * i64::from(size.h.max(0))
+        })
+        .sum::<i64>();
+    let total = i64::from(work_area.size.w.max(0)) * i64::from(work_area.size.h.max(0));
+    total > 0 && covered < total - total / 50
+}
+
+/// Clamp a remembered lone-tile frame into the current work area.
+#[cfg(feature = "flutter")]
+fn fit_gamepad_single_frame(
+    frame: Rectangle<i32, Logical>,
+    bounds: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    let width = frame.size.w.clamp(64.min(bounds.size.w), bounds.size.w);
+    let height = frame.size.h.clamp(64.min(bounds.size.h), bounds.size.h);
+    Rectangle::new(
+        Point::from((
+            frame
+                .loc
+                .x
+                .clamp(bounds.loc.x, bounds.loc.x + bounds.size.w - width),
+            frame
+                .loc
+                .y
+                .clamp(bounds.loc.y, bounds.loc.y + bounds.size.h - height),
+        )),
+        Size::from((width, height)),
+    )
+}
+
+/// Apply one edge drag to a lone gamepad tile, clamped to the work area and a
+/// 64px minimum on each axis.
+#[cfg(feature = "flutter")]
+fn resize_gamepad_single_frame(
+    frame: Rectangle<i32, Logical>,
+    bounds: Rectangle<i32, Logical>,
+    edges: LayoutResizeEdges,
+    delta_x: f64,
+    delta_y: f64,
+) -> Rectangle<i32, Logical> {
+    if !delta_x.is_finite() || !delta_y.is_finite() {
+        return frame;
+    }
+    let mut left = f64::from(frame.loc.x);
+    let mut top = f64::from(frame.loc.y);
+    let mut right = left + f64::from(frame.size.w);
+    let mut bottom = top + f64::from(frame.size.h);
+    let min_width = f64::from(64.min(bounds.size.w));
+    let min_height = f64::from(64.min(bounds.size.h));
+    if edges.left {
+        left = (left + delta_x).clamp(f64::from(bounds.loc.x), right - min_width);
+    }
+    if edges.right {
+        right = (right + delta_x).clamp(left + min_width, f64::from(bounds.loc.x + bounds.size.w));
+    }
+    if edges.top {
+        top = (top + delta_y).clamp(f64::from(bounds.loc.y), bottom - min_height);
+    }
+    if edges.bottom {
+        bottom =
+            (bottom + delta_y).clamp(top + min_height, f64::from(bounds.loc.y + bounds.size.h));
+    }
+    Rectangle::new(
+        Point::from((left.round() as i32, top.round() as i32)),
+        Size::from(((right - left).round() as i32, (bottom - top).round() as i32)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use smithay::utils::{Point, Size};
@@ -1799,6 +2052,64 @@ mod tests {
 
     fn rect(x: i32, y: i32, width: i32, height: i32) -> Rectangle<i32, Logical> {
         Rectangle::new(Point::from((x, y)), Size::from((width, height)))
+    }
+
+    #[test]
+    fn gamepad_workspace_free_space_requires_usable_remaining_area() {
+        let work = rect(16, 51, 1200, 700);
+        let full = [LayoutPlacement {
+            window: 1u64,
+            geometry: work,
+        }];
+        assert!(!gamepad_workspace_has_free_space(&full, work));
+        let half = [LayoutPlacement {
+            window: 1u64,
+            geometry: rect(16, 51, 600, 700),
+        }];
+        assert!(gamepad_workspace_has_free_space(&half, work));
+        let filled = [
+            LayoutPlacement {
+                window: 1u64,
+                geometry: rect(16, 51, 600, 700),
+            },
+            LayoutPlacement {
+                window: 2u64,
+                geometry: rect(616, 51, 600, 700),
+            },
+        ];
+        assert!(!gamepad_workspace_has_free_space(&filled, work));
+    }
+
+    #[test]
+    fn gamepad_single_resize_moves_only_requested_edges_and_clamps() {
+        let bounds = rect(16, 51, 1200, 700);
+        let frame = rect(16, 51, 1200, 700);
+        let east = resize_gamepad_single_frame(
+            frame,
+            bounds,
+            LayoutResizeEdges {
+                top: false,
+                bottom: false,
+                left: false,
+                right: true,
+            },
+            -80.0,
+            0.0,
+        );
+        assert_eq!(east, rect(16, 51, 1120, 700));
+        let clamped = resize_gamepad_single_frame(
+            frame,
+            bounds,
+            LayoutResizeEdges {
+                top: false,
+                bottom: false,
+                left: true,
+                right: false,
+            },
+            5000.0,
+            0.0,
+        );
+        assert_eq!(clamped, rect(1152, 51, 64, 700));
     }
 
     #[test]

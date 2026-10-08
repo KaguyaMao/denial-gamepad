@@ -722,6 +722,18 @@ impl PointerGrab<RuntimeState> for TileResizeGrab {
                 WindowPlacementChange::Resize,
             );
         }
+        // The touch shell keeps one workspace. When a resize squeezes a sibling
+        // pane out of existence, background it and let the resized window take
+        // the space.
+        let squeezed = data
+            .wayland
+            .as_ref()
+            .filter(|frontend| frontend.gamepad_shell())
+            .map(|frontend| frontend.layout_siblings_squeezed_out(&self.window))
+            .unwrap_or_default();
+        for window_id in squeezed {
+            super::wayland_frontend::minimize_toplevel_by_id(data, window_id);
+        }
         data.scene_sync.mark_dirty();
     }
 

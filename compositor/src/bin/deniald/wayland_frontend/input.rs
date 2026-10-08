@@ -855,6 +855,66 @@ impl WaylandFrontend {
     fn touch_window_target_at(&self, position: Point<f64, Logical>) -> Option<TouchWindowTarget> {
         let layout = self.input_layout.as_ref()?;
         let scene_position = position - self.atlas_origin;
+        #[cfg(feature = "flutter")]
+        if self.gamepad_shell {
+            // Flutter owns overview, the lock screen, the shade and any other
+            // exclusive surface; only the bare desktop reaches tile gestures.
+            if layout.exclusive_shell()
+                || layout
+                    .shell_regions
+                    .iter()
+                    .any(|region| region.contains(scene_position.x, scene_position.y))
+            {
+                return None;
+            }
+            let output = self
+                .outputs
+                .iter()
+                .find(|output| output.logical_geometry.to_f64().contains(position))?;
+            let bounds = output.logical_geometry;
+            // The Dock strip reserves its own gestures (shade/home).
+            if position.y < f64::from(bounds.loc.y) + crate::options::GAMEPAD_SYSTEM_BAR_THICKNESS {
+                return None;
+            }
+            // Edge resize, front-to-back, excluding the physical bottom edge
+            // that the home strip owns.
+            if position.y < f64::from(bounds.loc.y + bounds.size.h) - 8.0 {
+                for window in self.space.elements().rev() {
+                    let Some(root) = self.window_root_surface(window) else {
+                        continue;
+                    };
+                    let Some(id) = self.surface_id(&root) else {
+                        continue;
+                    };
+                    if self.window_is_minimized(id)
+                        || !self.window_is_on_active_workspace(id)
+                        || !self.window_is_layout_managed(window)
+                    {
+                        continue;
+                    }
+                    let geometry = self.window_geometry_target(window);
+                    if let Some(edges) =
+                        super::touch_gestures::gamepad_resize_edges(position, geometry)
+                    {
+                        return Some(TouchWindowTarget {
+                            window_id: id,
+                            geometry: super::super::wire::WindowGeometry {
+                                x: f64::from(geometry.loc.x),
+                                y: f64::from(geometry.loc.y),
+                                width: f64::from(geometry.size.w),
+                                height: f64::from(geometry.size.h),
+                            },
+                            in_gesture_strip: false,
+                            in_move_corner: false,
+                            geometry_locked: true,
+                            gamepad_shell: true,
+                            resize_edges: Some(edges),
+                        });
+                    }
+                }
+            }
+            return None;
+        }
         if layout.exclusive_shell()
             || layout
                 .shell_regions
@@ -895,6 +955,8 @@ impl WaylandFrontend {
                 on_horizontal_edge && on_vertical_edge
             },
             geometry_locked: region.geometry_locked(),
+            gamepad_shell: false,
+            resize_edges: None,
         })
     }
 
