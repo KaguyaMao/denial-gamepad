@@ -278,6 +278,9 @@ final class DesktopShellServices implements ShellServices {
   @override
   void openOverview() => onOpenOverview?.call();
   @override
+  void openQuickSettings() =>
+      ref.read(referenceShellProvider.notifier).openQuickSettings();
+  @override
   MouseCursor get normalCursor => ShellMouseCursors.normal;
   @override
   MouseCursor get linkCursor => ShellMouseCursors.link;

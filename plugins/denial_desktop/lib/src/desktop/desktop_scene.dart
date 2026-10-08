@@ -631,11 +631,15 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
         continue;
       }
       final placement = oldWidget.desktop.placements[window.objectId];
+      // A card dismissed from overview plays the close effect at its preview
+      // frame even when the application was backgrounded (minimized), matching
+      // the desktop close animation.
+      final inOverview = oldWidget.desktop.isInOverview(window.objectId);
       if (widget.closeEffect == DesktopWindowCloseEffect.none ||
           !window.isUserApp ||
           window.suppressAnimations ||
           placement == null ||
-          placement.minimized) {
+          (placement.minimized && !inOverview)) {
         widget.onCloseLeaseComplete(window.windowId);
         continue;
       }

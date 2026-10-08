@@ -326,6 +326,7 @@ class DesktopWindowFrame extends ConsumerWidget {
       dragging: placement.dragging,
       resizing: placement.resizing,
       layoutPreviewing: placement.layoutPreviewing,
+      directOverviewScroll: swipeOverviewUpCloses,
       pixelAlignmentInset: placement.frameBorder,
       pixelGridScale: devicePixelRatio,
       pixelGridOrigin: pixelGridOrigin,
@@ -640,6 +641,7 @@ class DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
     required this.dragging,
     required this.resizing,
     required this.layoutPreviewing,
+    this.directOverviewScroll = false,
     this.pixelAlignmentInset,
     this.pixelGridScale,
     this.pixelGridOrigin = Offset.zero,
@@ -661,6 +663,10 @@ class DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
   final bool dragging;
   final bool resizing;
   final bool layoutPreviewing;
+
+  /// Touch overview strip: the card follows the finger directly instead of
+  /// restarting the overview entrance tween on every scroll sample.
+  final bool directOverviewScroll;
   final double? pixelAlignmentInset;
   final double? pixelGridScale;
   final Offset pixelGridOrigin;
@@ -681,6 +687,7 @@ class _DesktopAnimatedWindowPositionState
   bool _overviewTransitionActive = false;
   bool _layoutPreviewExitActive = false;
   bool _resizeJustEnded = false;
+  bool _directScrollUpdate = false;
   Rect? _dragReleaseAnimationOrigin;
 
   @override
@@ -700,6 +707,18 @@ class _DesktopAnimatedWindowPositionState
   void didUpdateWidget(covariant DesktopAnimatedWindowPosition oldWidget) {
     super.didUpdateWidget(oldWidget);
     _resizeJustEnded = oldWidget.resizing && !widget.resizing;
+    // Do not restart the overview entrance tween on every touch sample. That
+    // made the cards chase the finger with hundreds of milliseconds of lag.
+    _directScrollUpdate =
+        widget.directOverviewScroll &&
+        widget.overview &&
+        oldWidget.overview &&
+        widget.rect != oldWidget.rect &&
+        widget.rect.size == oldWidget.rect.size;
+    if (_directScrollUpdate) {
+      _overviewTransitionActive = false;
+      _overviewTransitionCompleted.value = true;
+    }
     final layoutPreviewGeometryChanged =
         widget.rect != oldWidget.rect &&
         (widget.layoutPreviewing || oldWidget.layoutPreviewing);
@@ -790,7 +809,10 @@ class _DesktopAnimatedWindowPositionState
     // Also commit the release rectangle immediately if the final pointer
     // sample and transaction end arrive in the same Flutter frame.
     final positionDuration =
-        widget.dragging || widget.resizing || _resizeJustEnded
+        widget.dragging ||
+            widget.resizing ||
+            _resizeJustEnded ||
+            _directScrollUpdate
         ? Duration.zero
         : previewMotionActive && widget.duration != Duration.zero
         ? Motion.layoutTileReflow

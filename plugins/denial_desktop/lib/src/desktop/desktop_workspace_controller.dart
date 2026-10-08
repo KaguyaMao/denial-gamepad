@@ -1043,9 +1043,11 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     if (_stripOverview) {
       // The strip scrolls as a whole; cards never rearrange individually.
       final content = _overviewStripExtent(overview);
-      final next = (overview.scrollOffset + delta.dx)
-          .clamp(-content, 0.0)
-          .toDouble();
+      final next =
+          (overview.scrollOffset +
+                  delta.dx * DesktopMetrics.touchOverviewScrollGain)
+              .clamp(-content, 0.0)
+              .toDouble();
       if (next != overview.scrollOffset) {
         // Scrolling only translates the strip; native window regions are
         // unchanged, so do not wake the input-layout publisher per sample.

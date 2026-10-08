@@ -4,7 +4,9 @@ import 'dart:math' as math;
 import 'package:denial_flutter_sdk/effects.dart';
 import 'package:denial_flutter_sdk/input.dart';
 import 'package:denial_flutter_sdk/panels.dart';
+import 'package:denial_flutter_sdk/service_backends.dart';
 import 'package:denial_flutter_sdk/services.dart';
+import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/theme.dart';
 import 'package:denial_sdk/system.dart';
 import 'package:flutter/material.dart';
@@ -245,6 +247,8 @@ class _TouchSystemBar extends ConsumerWidget {
               ),
             ),
           ),
+          const _TouchNetworkModule(),
+          const SizedBox(width: 8),
           if (battery.capacity != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -265,6 +269,49 @@ class _TouchSystemBar extends ConsumerWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The touch bar's network entry: a bare Wi-Fi glyph that opens quick settings.
+class _TouchNetworkModule extends ConsumerWidget {
+  const _TouchNetworkModule();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final services = ShellServicesScope.of(context);
+    final network = ref.watch(networkConnectivityProvider).snapshot;
+    final wifi = network.connectedNetwork;
+    final connected = switch (network.status) {
+      NetworkConnectivityStatus.online ||
+      NetworkConnectivityStatus.local ||
+      NetworkConnectivityStatus.limited ||
+      NetworkConnectivityStatus.captivePortal => true,
+      _ => false,
+    };
+    final strength = wifi?.strength ?? 0;
+    return Semantics(
+      label: wifi?.ssid ?? 'Network',
+      button: true,
+      child: GestureDetector(
+        key: const ValueKey('touch-bar-network'),
+        behavior: HitTestBehavior.opaque,
+        onTap: services.openQuickSettings,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Icon(
+            wifi == null
+                ? (connected ? Icons.lan_rounded : Icons.wifi_off_rounded)
+                : strength < 34
+                ? Icons.network_wifi_1_bar
+                : strength < 67
+                ? Icons.network_wifi_2_bar
+                : Icons.wifi_rounded,
+            size: 22,
+            color: context.shellColors.textPrimary,
+          ),
+        ),
       ),
     );
   }

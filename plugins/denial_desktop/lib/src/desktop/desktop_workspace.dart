@@ -16,6 +16,10 @@ part 'desktop_workspace_controller.dart';
 
 abstract final class DesktopMetrics {
   static const double frameBorder = 1.0;
+
+  /// Touch overview strips pan faster than the finger so one short swipe can
+  /// reach a distant card.
+  static const double touchOverviewScrollGain = 1.8;
   static const double panelGap = 12.0;
   static const double panelMargin = 14.0;
   // Meet the panel at its resting edge so crossing from trigger to surface

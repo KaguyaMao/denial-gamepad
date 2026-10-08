@@ -101,6 +101,9 @@ abstract interface class ShellDesktopServices {
 
   /// Opens the window overview.
   void openOverview();
+
+  /// Opens the quick settings shade.
+  void openQuickSettings();
 }
 
 /// Output geometry and workspace projections/actions.
