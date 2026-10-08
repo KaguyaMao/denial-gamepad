@@ -27,10 +27,21 @@ adds touch-first admission and resize behavior in the compositor.
 
 ## Touch Dock
 
-The top bar presents a touch Dock: a launcher entry, running/minimized window
-icons, battery, clock, and a power entry that opens the session power surface
-(restart, shut down, log out, suspend). Dock controls render without pill card
-backgrounds.
+The top bar presents a touch Dock: a launcher entry (the Kaguya avatar),
+running/minimized window icons, an overview entry, battery, clock, and a power
+entry that opens the session power surface (restart, shut down, log out,
+suspend). Dock controls render without pill card backgrounds.
+
+## Overview
+
+The touch profile opens overview as a horizontally scrolling strip of window
+cards rather than the workspace-card deck:
+
+- Dragging anywhere horizontally scrolls the strip, including on a card, and
+  releasing glides it to a stop.
+- An upward swipe on a card closes its application.
+- Tapping a card activates it; tapping anywhere outside the cards exits
+  overview.
 
 ## Input
 

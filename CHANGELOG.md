@@ -15,6 +15,9 @@ boundaries may change before 1.0.
   resizes from any edge, a shared split boundary resizes both panes, and the top
   bar presents a touch Dock with running windows, battery, clock, and a power
   entry.
+- The touch profile shows overview as a horizontally scrolling window strip:
+  cards pan freely with release inertia, an upward swipe closes a card, and
+  tapping outside the cards exits overview.
 - Denial can now compose its Flutter shell from typed built-in and external
   plugins. The optional `denial-plugin-manager` package provides the graphical
   manager, CLI, version-matched compiler kit, validated Apply/recovery flow,
