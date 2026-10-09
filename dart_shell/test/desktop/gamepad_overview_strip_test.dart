@@ -66,6 +66,39 @@ void main() {
     expect(second.width / second.height, closeTo(1200 / 749, 0.01));
   });
 
+  test('backgrounding a card removes it from the overview', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final workspace = container.read(desktopWorkspaceProvider.notifier);
+    workspace.syncWindows(
+      <DenialWindow>[_window(1), _window(2)],
+      _size,
+      1,
+      snapshotSequence: 1,
+      windowLayout: DesktopWindowLayout.dwindle,
+      stripOverview: true,
+    );
+    workspace.toggleOverview(
+      monitorId: 0,
+      bounds: _bounds,
+      backgroundBounds: const Rect.fromLTWH(0, 0, 1200, 800),
+      objectIds: {1, 2},
+    );
+    expect(
+      container.read(desktopWorkspaceProvider).overview!.frames,
+      hasLength(2),
+    );
+
+    workspace.backgroundOverviewWindow(1);
+    final overview = container.read(desktopWorkspaceProvider).overview;
+    expect(
+      overview?.frames.containsKey(1),
+      false,
+      reason: 'a backgrounded card must leave the strip',
+    );
+    expect(overview?.frames.containsKey(2), true);
+  });
+
   test('strip scrolling pans freely and survives a live snapshot', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);

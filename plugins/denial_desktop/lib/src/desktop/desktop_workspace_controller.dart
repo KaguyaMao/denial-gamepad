@@ -1001,6 +1001,35 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     return true;
   }
 
+  /// Removes a card from the strip after its application is backgrounded.
+  ///
+  /// The window stays open and minimized, but the touch overview must drop its
+  /// card immediately; a minimized window keeps its placement, so the live
+  /// snapshot would otherwise rebuild the card and the swipe would look like it
+  /// did nothing.
+  void backgroundOverviewWindow(int objectId) {
+    final overview = state.overview;
+    if (overview == null || !overview.contains(objectId)) {
+      return;
+    }
+    final frames = Map<int, Rect>.of(overview.frames)..remove(objectId);
+    if (frames.isEmpty) {
+      state = state.copyWith(clearOverview: true);
+      return;
+    }
+    final extent = _overviewStripExtent(overview.copyWith(frames: frames));
+    final selected = overview.selectedObjectId == objectId
+        ? _nearestOverviewObjectId(frames, overview.frames[objectId]?.center)
+        : overview.selectedObjectId;
+    state = state.copyWith(
+      overview: overview.copyWith(
+        frames: frames,
+        selectedObjectId: selected,
+        scrollOffset: overview.scrollOffset.clamp(-extent, 0.0).toDouble(),
+      ),
+    );
+  }
+
   void closeOverview() {
     if (!state.overviewActive) {
       return;

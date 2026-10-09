@@ -619,6 +619,11 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
   /// Used by the touch overview's upward swipe, which preserves the split
   /// arrangement instead of terminating the process.
   void _backgroundWindow(DenialWindow window) {
+    // Drop the card immediately; the window stays open but minimized, so a
+    // later snapshot would otherwise rebuild the card.
+    ref
+        .read(desktopWorkspaceProvider.notifier)
+        .backgroundOverviewWindow(window.objectId);
     ref
         .read(denialBridgeProvider)
         .configureWindow(
