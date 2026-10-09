@@ -1130,6 +1130,9 @@ fn init_listener(
             if let Some(credentials) = socket_peer_credentials(&client_stream) {
                 client_state.peer_pid = Some(credentials.pid);
                 client_state.peer_uid = Some(credentials.uid);
+                // Pin the socket's authenticated process, not an app-supplied
+                // PID or a numeric PID which may later be reused.
+                client_state.peer_pidfd = socket_peer_pidfd(&client_stream);
             }
             if let Err(error) = frontend
                 .display_handle
@@ -1194,6 +1197,30 @@ fn socket_peer_credentials(stream: &std::os::unix::net::UnixStream) -> Option<li
     }
     // SAFETY: the successful call initialized the complete structure.
     Some(unsafe { credentials.assume_init() })
+}
+
+fn socket_peer_pidfd(stream: &std::os::unix::net::UnixStream) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    // Linux >= 6.5. Older kernels safely fall back to a protocol close, never
+    // signal a stale PID or the compositor's shared Xwayland process.
+    const SO_PEERPIDFD: libc::c_int = 77;
+    let mut fd: libc::c_int = -1;
+    let mut size = std::mem::size_of_val(&fd) as libc::socklen_t;
+    // SAFETY: fd and size are writable, correctly sized getsockopt outputs.
+    let status = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            SO_PEERPIDFD,
+            std::ptr::addr_of_mut!(fd).cast(),
+            &mut size,
+        )
+    };
+    if status != 0 || fd < 0 {
+        return None;
+    }
+    // SAFETY: successful SO_PEERPIDFD returns a newly owned descriptor.
+    Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
 }
 
 #[cfg(feature = "flutter")]

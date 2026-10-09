@@ -615,22 +615,10 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     showPowerSessionSurface(ref);
   }
 
-  /// Sends an application to the background through the managed minimize path.
-  /// Used by the touch overview's upward swipe, which preserves the split
-  /// arrangement instead of terminating the process.
-  void _backgroundWindow(DenialWindow window) {
-    // Drop the card immediately; the window stays open but minimized, so a
-    // later snapshot would otherwise rebuild the card.
-    ref
-        .read(desktopWorkspaceProvider.notifier)
-        .backgroundOverviewWindow(window.objectId);
-    ref
-        .read(denialBridgeProvider)
-        .configureWindow(
-          window,
-          window.presentationCoordinateRect,
-          minimize: true,
-        );
+  /// Overview dismissal is process termination, distinct from the desktop's
+  /// upward background gesture. Native layout ownership resolves split peers.
+  void _terminateOverviewGroup(DenialWindow window) {
+    ref.read(denialBridgeProvider).terminateOverviewGroup(window);
   }
 
   void _openSettingsPage(SettingsPageId? page) {
@@ -1032,7 +1020,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
               onCloseWindow: ref
                   .read(referenceShellProvider.notifier)
                   .closeWindow,
-              onBackgroundWindow: _backgroundWindow,
+              onTerminateOverviewGroup: _terminateOverviewGroup,
               onOverviewBarrierTap: _handleOverviewBarrierTap,
               onSelectOverviewWorkspace: _selectOverviewWorkspace,
               onBeginOverviewDrag: _beginOverviewDrag,

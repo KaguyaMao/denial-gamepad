@@ -775,8 +775,16 @@ impl WaylandFrontend {
     /// Touch admission. When the target workspace still has free space the new
     /// window tiles in beside the existing ones; once the workspace is full the
     /// new window replaces every existing one and owns the whole work area.
+    /// Small dialog-like windows (portal choosers, file pickers) never clear
+    /// the workspace: replacing it would unmap capture targets and the
+    /// ScreenCast source list.
     #[cfg(feature = "flutter")]
-    fn admit_gamepad_window(&mut self, window: &ObjectId, space: LayoutSpace) {
+    fn admit_gamepad_window(
+        &mut self,
+        window: &ObjectId,
+        space: LayoutSpace,
+        restore: Rectangle<i32, Logical>,
+    ) {
         let placements = self
             .current_layout_placements()
             .into_iter()
@@ -794,6 +802,9 @@ impl WaylandFrontend {
             return;
         };
         let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
+        if gamepad_new_window_is_dialog(restore, work_area) {
+            return;
+        }
         if gamepad_workspace_has_free_space(&placements, work_area) {
             return;
         }
@@ -1152,7 +1163,7 @@ impl WaylandFrontend {
         let space = self.layout_space_for_window(window, physical_output);
         #[cfg(feature = "flutter")]
         if self.gamepad_shell {
-            self.admit_gamepad_window(&window_id, space);
+            self.admit_gamepad_window(&window_id, space, restore);
         }
         if has_visible_size(restore) {
             self.ensure_window_record_for_surface(&window_id)
@@ -2027,6 +2038,25 @@ fn gamepad_workspace_has_free_space<Id>(
     total > 0 && covered < total - total / 50
 }
 
+/// Small dialog-like windows must not clear a full gamepad workspace.
+///
+/// Portal ScreenCast choosers, file pickers, and other dialogs are a fraction
+/// of the work area. Replacing the workspace for them would unmap the very
+/// capture targets the chooser lists, leaving OBS with no window sources.
+#[cfg(feature = "flutter")]
+fn gamepad_new_window_is_dialog(
+    restore: Rectangle<i32, Logical>,
+    work_area: Rectangle<i32, Logical>,
+) -> bool {
+    if !has_visible_size(restore) || !has_visible_size(work_area) {
+        return false;
+    }
+    let window_area =
+        i64::from(restore.size.w.max(0)) * i64::from(restore.size.h.max(0));
+    let total = i64::from(work_area.size.w.max(0)) * i64::from(work_area.size.h.max(0));
+    total > 0 && window_area * 5 < total * 2
+}
+
 /// Clamp a remembered lone-tile frame into the current work area.
 #[cfg(feature = "flutter")]
 fn fit_gamepad_single_frame(
@@ -2099,8 +2129,7 @@ mod tests {
     }
 
     #[test]
-    fn gamepad_workspace_free_space_requires_usable_remaining_area() {
-        let work = rect(16, 51, 1200, 700);
+    fn gamepad_workspace_free_space_requires_usable_remaining_area() {        let work = rect(16, 51, 1200, 700);
         let full = [LayoutPlacement {
             window: 1u64,
             geometry: work,
@@ -2122,6 +2151,17 @@ mod tests {
             },
         ];
         assert!(!gamepad_workspace_has_free_space(&filled, work));
+    }
+
+    #[test]
+    fn gamepad_dialog_windows_preserve_a_full_workspace() {
+        let work = rect(16, 51, 1200, 700);
+        // A portal chooser is a fraction of the work area: it must tile
+        // alongside instead of clearing capture targets.
+        assert!(gamepad_new_window_is_dialog(rect(400, 200, 500, 300), work));
+        assert!(!gamepad_new_window_is_dialog(rect(16, 51, 1200, 700), work));
+        assert!(!gamepad_new_window_is_dialog(rect(16, 51, 600, 700), work));
+        assert!(!gamepad_new_window_is_dialog(rect(0, 0, 0, 0), work));
     }
 
     #[test]

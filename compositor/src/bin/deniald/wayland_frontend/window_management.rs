@@ -435,6 +435,10 @@ fn apply_targeted_window_command(state: &mut RuntimeState, command: WindowComman
     let window_id = command
         .window_id()
         .expect("non-global window command is missing its target");
+    if matches!(command, WindowCommand::TerminateOverviewGroup { .. }) {
+        terminate_overview_group(state, window_id);
+        return;
+    }
     let is_local = state
         .wayland
         .as_ref()
@@ -500,7 +504,8 @@ fn apply_local_window_command(state: &mut RuntimeState, window_id: u64, command:
                 state.scene_sync.mark_dirty();
             }
         }
-        WindowCommand::CreateLocal { .. }
+        WindowCommand::TerminateOverviewGroup { .. }
+        | WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
         | WindowCommand::MoveToWorkspace { .. }
         | WindowCommand::DropOnWorkspace { .. }
@@ -544,11 +549,115 @@ fn apply_client_window_command(
                 layout_drop,
             )
         }
-        WindowCommand::CreateLocal { .. }
+        WindowCommand::TerminateOverviewGroup { .. }
+        | WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
         | WindowCommand::MoveToWorkspace { .. }
         | WindowCommand::DropOnWorkspace { .. }
         | WindowCommand::PreviewWorkspaceDrop { .. } => unreachable!(),
+    }
+}
+
+/// X11 surface PID without touching the shared Xwayland socket peer.
+#[cfg(feature = "flutter")]
+#[cfg(feature = "xwayland")]
+fn x11_overview_app_pid(window: &Window) -> Option<u32> {
+    window.x11_surface().and_then(|surface| surface.pid())
+}
+
+/// Without Xwayland there is no X11 PID to signal; fall back to a protocol close.
+#[cfg(feature = "flutter")]
+#[cfg(not(feature = "xwayland"))]
+fn x11_overview_app_pid(_window: &Window) -> Option<u32> {
+    None
+}
+
+/// Resolve every split peer before signalling any client: the first process
+/// exiting must not rearrange the tree and change the remaining targets.
+#[cfg(feature = "flutter")]
+fn terminate_overview_group(state: &mut RuntimeState, window_id: u64) {
+    use std::os::fd::AsRawFd;
+
+    let Some(frontend) = state.wayland.as_mut() else { return };
+    if !frontend.gamepad_shell {
+        warn!(window_id, "overview process termination is gamepad-only");
+        return;
+    }
+    if frontend.is_local_flutter_window(window_id) {
+        // Embedded apps share deniald; never kill the graphical session.
+        if frontend.remove_local_flutter_window(window_id) {
+            state.scene_sync.mark_dirty();
+        }
+        return;
+    }
+    let Some(window) = frontend.window_for_id(window_id) else { return };
+    let peers = frontend.layout_window_geometries(&window);
+    let windows = if peers.is_empty() {
+        vec![window]
+    } else {
+        peers.into_iter().map(|(window, _)| window).collect()
+    };
+    let mut signalled = std::collections::HashSet::new();
+    for window in windows {
+        // X11 clients share one Xwayland socket: its pidfd identifies Xwayland
+        // itself, never the application. Kill only the X11 surface's own PID
+        // (which differs from the socket peer), otherwise request a close.
+        if ManagedWindow::new(&window).is_some_and(|managed| managed.facts().x11) {
+            let peer_pid = frontend
+                .window_root_surface(&window)
+                .and_then(|root| root.client())
+                .and_then(|client| {
+                    client
+                        .get_data::<super::handlers::DenialClientState>()
+                        .and_then(|identity| identity.peer_pid)
+                });
+            let app_pid = x11_overview_app_pid(&window);
+            let own_pid = std::process::id();
+            let distinct = match (app_pid, peer_pid) {
+                (Some(app), Some(peer)) => app != peer as u32 && app != own_pid && app > 1,
+                (Some(app), None) => app != own_pid && app > 1,
+                _ => false,
+            };
+            if distinct {
+                let app = app_pid.expect("x11 pid checked above") as i32;
+                if signalled.insert(app) {
+                    // SAFETY: best-effort SIGKILL of the application PID only;
+                    // Xwayland itself is never signalled from this path.
+                    let status = unsafe { libc::kill(app, libc::SIGKILL) };
+                    if status == 0 {
+                        continue;
+                    }
+                    warn!(pid = app, error = %std::io::Error::last_os_error(), "could not terminate overview x11 application");
+                } else {
+                    continue;
+                }
+            }
+            warn!(window_id, "no distinct x11 application pid; requesting window close instead");
+            close_window(&window);
+            continue;
+        }
+        let client = frontend.window_root_surface(&window).and_then(|root| root.client());
+        let identity = client.as_ref().and_then(|client| client.get_data::<super::handlers::DenialClientState>());
+        if let Some(identity) = identity {
+            let allowed = identity.peer_uid == Some(unsafe { libc::geteuid() })
+                && identity.peer_pid.is_some_and(|pid| pid > 1 && pid as u32 != std::process::id());
+            if allowed {
+                if let (Some(pid), Some(pidfd)) = (identity.peer_pid, identity.peer_pidfd.as_ref()) {
+                    if !signalled.insert(pid) { continue; }
+                    // SAFETY: pidfd is owned by this live Wayland connection;
+                    // SIGKILL targets only its authenticated peer process.
+                    let status = unsafe {
+                        libc::syscall(libc::SYS_pidfd_send_signal, pidfd.as_raw_fd(), libc::SIGKILL, std::ptr::null::<libc::siginfo_t>(), 0)
+                    };
+                    if status == 0 { continue; }
+                    warn!(pid, error = %std::io::Error::last_os_error(), "could not terminate overview application");
+                }
+            }
+        }
+        // X11's root belongs to shared Xwayland, and _NET_WM_PID is untrusted.
+        // Do not kill Xwayland or guess a process ID from application metadata.
+        warn!(window_id, "no authenticated process handle; requesting window close instead");
+        close_window(&window);
     }
 }
 

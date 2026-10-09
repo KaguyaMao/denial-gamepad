@@ -130,6 +130,9 @@ pub enum WindowCommand {
     Close {
         window_id: u64,
     },
+    TerminateOverviewGroup {
+        window_id: u64,
+    },
     Focus {
         window_id: u64,
     },
@@ -258,6 +261,7 @@ impl WindowCommand {
             Self::CreateLocal { .. } => None,
             Self::SwitchWorkspace { .. } => None,
             Self::Close { window_id }
+            | Self::TerminateOverviewGroup { window_id }
             | Self::Focus { window_id }
             | Self::Configure { window_id, .. }
             | Self::MoveToWorkspace { window_id, .. }

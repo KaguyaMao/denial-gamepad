@@ -1,4 +1,5 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
+import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
 import 'package:denial_desktop/src/state/reference_shell_profile.dart';
 
 import 'package:denial_flutter_sdk/popups.dart';
@@ -174,14 +175,14 @@ class DenialShell extends ConsumerWidget {
   }
 }
 
-class _ProfileScene extends StatelessWidget {
+class _ProfileScene extends ConsumerWidget {
   const _ProfileScene({required this.profile, required this.scene});
 
   final ReferenceShellProfile profile;
   final DenialShellScene scene;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (profile == ReferenceShellProfile.mobile) {
       return InputLayoutPublisher(
         child: Stack(
@@ -233,9 +234,44 @@ class _ProfileScene extends StatelessWidget {
       child: profile == ReferenceShellProfile.gamepad
           ? Stack(
               fit: StackFit.expand,
-              children: [stage, const MobileSystemKeyboardLayer()],
+              children: [
+                _GamepadKeyboardInset(child: stage),
+                const MobileSystemKeyboardLayer(),
+              ],
             )
           : stage,
+    );
+  }
+}
+
+/// Reserves the software-keyboard height inside the Flutter scene itself.
+///
+/// The compositor already shrinks the native tile work area, but Flutter-owned
+/// UI (lock screen, launcher search, desktop chrome) lays out in the full
+/// view and would otherwise sit behind the keyboard overlay. iOS
+/// (adjustResize), Android, and Plasma all shrink the app area above the
+/// keyboard instead of covering it; this padding gives the gamepad scene the
+/// same behavior so focused fields stay visible.
+class _GamepadKeyboardInset extends ConsumerWidget {
+  const _GamepadKeyboardInset({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final progress = ref.watch(
+      referenceShellProvider.select(
+        (state) => state.edgePanelDragProgress,
+      ),
+    );
+    final viewSize = MediaQuery.sizeOf(context);
+    final inset =
+        ReferenceShellMetrics.edgePanelHeight(viewSize) * progress.clamp(0.0, 1.0);
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.only(bottom: inset),
+      child: child,
     );
   }
 }

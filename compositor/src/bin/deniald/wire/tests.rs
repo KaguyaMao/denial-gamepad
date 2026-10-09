@@ -718,6 +718,24 @@ fn enforces_message_collection_and_command_queue_limits() {
 }
 
 #[test]
+fn overview_termination_is_explicit_and_rejects_unknown_flags() {
+    let mut bridge = bridge();
+    bridge.handle(&window_request_with_flags(
+        fb::WindowRequestKind::CloseWindow, 0, 42, None, 1, 1,
+    )).unwrap();
+    assert_eq!(bridge.pending_window_commands.pop_front(),
+        Some(WindowCommand::TerminateOverviewGroup { window_id: 42 }));
+    bridge.handle(&window_request_with_flags(
+        fb::WindowRequestKind::CloseWindow, 0, 42, None, 2, 0,
+    )).unwrap();
+    assert_eq!(bridge.pending_window_commands.pop_front(),
+        Some(WindowCommand::Close { window_id: 42 }));
+    assert!(matches!(bridge.handle(&window_request_with_flags(
+        fb::WindowRequestKind::CloseWindow, 0, 42, None, 3, 2,
+    )), Err(WireError::Flags)));
+}
+
+#[test]
 fn encodes_atomic_cursor_states_and_rejects_invalid_values_without_sequence_gaps() {
     let mut bridge = bridge();
     let invalid_named = CursorStateDescription {

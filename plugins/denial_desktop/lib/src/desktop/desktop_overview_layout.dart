@@ -47,7 +47,11 @@ abstract final class DesktopOverviewLayout {
     double? stripAspectRatio,
   }) {
     final usefulItems = items
-        .where((item) => isUsefulPreview(item.frame))
+        .where(
+          (item) => strip && stripAspectRatio != null
+              ? !item.frame.isEmpty
+              : isUsefulPreview(item.frame),
+        )
         .toList(growable: false);
     if (usefulItems.isEmpty || bounds.width <= 0.0 || bounds.height <= 0.0) {
       return const <int, Rect>{};
@@ -97,12 +101,14 @@ abstract final class DesktopOverviewLayout {
         uniformAspectRatio ?? item.aspectRatio;
     final naturalHeights = <double>[
       for (final item in items)
-        math.min(
-          height,
-          _sourcePreviewHeight(item) == double.infinity
-              ? height
-              : _sourcePreviewHeight(item),
-        ),
+        uniformAspectRatio != null
+            ? height
+            : math.min(
+                height,
+                _sourcePreviewHeight(item) == double.infinity
+                    ? height
+                    : _sourcePreviewHeight(item),
+              ),
     ];
     final heights = naturalHeights
         .map((value) => value.clamp(120.0, height))

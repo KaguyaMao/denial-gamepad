@@ -267,9 +267,6 @@ class DesktopWindowFrame extends ConsumerWidget {
             ),
           )
         : 0.0;
-    final scrolledFrame = overviewScroll == 0.0
-        ? liveFrame
-        : liveFrame.shift(Offset(overviewScroll, 0.0));
     final devicePixelRatio =
         outputPixelGrid?.scale ?? MediaQuery.devicePixelRatioOf(context);
     final pixelGridOrigin = outputPixelGrid?.logicalRect.topLeft ?? Offset.zero;
@@ -285,7 +282,7 @@ class DesktopWindowFrame extends ConsumerWidget {
       outputRect: outputRect,
     );
     final frame = desktopPixelAlignedWindowFrame(
-      frame: scrolledFrame,
+      frame: liveFrame,
       contentInset: placement.frameBorder,
       devicePixelRatio: devicePixelRatio,
       pixelGridOrigin: pixelGridOrigin,
@@ -343,7 +340,7 @@ class DesktopWindowFrame extends ConsumerWidget {
       dragging: placement.dragging,
       resizing: placement.resizing,
       layoutPreviewing: placement.layoutPreviewing,
-      directOverviewScroll: swipeOverviewUpCloses,
+      overviewScrollOffset: overviewScroll,
       pixelAlignmentInset: placement.frameBorder,
       pixelGridScale: devicePixelRatio,
       pixelGridOrigin: pixelGridOrigin,
@@ -659,7 +656,7 @@ class DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
     required this.dragging,
     required this.resizing,
     required this.layoutPreviewing,
-    this.directOverviewScroll = false,
+    this.overviewScrollOffset = 0.0,
     this.pixelAlignmentInset,
     this.pixelGridScale,
     this.pixelGridOrigin = Offset.zero,
@@ -682,9 +679,8 @@ class DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
   final bool resizing;
   final bool layoutPreviewing;
 
-  /// Touch overview strip: the card follows the finger directly instead of
-  /// restarting the overview entrance tween on every scroll sample.
-  final bool directOverviewScroll;
+  /// Shared view offset, independent of each card's entrance/reflow animation.
+  final double overviewScrollOffset;
   final double? pixelAlignmentInset;
   final double? pixelGridScale;
   final Offset pixelGridOrigin;
@@ -705,7 +701,6 @@ class _DesktopAnimatedWindowPositionState
   bool _overviewTransitionActive = false;
   bool _layoutPreviewExitActive = false;
   bool _resizeJustEnded = false;
-  bool _directScrollUpdate = false;
   Rect? _dragReleaseAnimationOrigin;
 
   @override
@@ -725,18 +720,6 @@ class _DesktopAnimatedWindowPositionState
   void didUpdateWidget(covariant DesktopAnimatedWindowPosition oldWidget) {
     super.didUpdateWidget(oldWidget);
     _resizeJustEnded = oldWidget.resizing && !widget.resizing;
-    // Do not restart the overview entrance tween on every touch sample. That
-    // made the cards chase the finger with hundreds of milliseconds of lag.
-    _directScrollUpdate =
-        widget.directOverviewScroll &&
-        widget.overview &&
-        oldWidget.overview &&
-        widget.rect != oldWidget.rect &&
-        widget.rect.size == oldWidget.rect.size;
-    if (_directScrollUpdate) {
-      _overviewTransitionActive = false;
-      _overviewTransitionCompleted.value = true;
-    }
     final layoutPreviewGeometryChanged =
         widget.rect != oldWidget.rect &&
         (widget.layoutPreviewing || oldWidget.layoutPreviewing);
@@ -827,10 +810,7 @@ class _DesktopAnimatedWindowPositionState
     // Also commit the release rectangle immediately if the final pointer
     // sample and transaction end arrive in the same Flutter frame.
     final positionDuration =
-        widget.dragging ||
-            widget.resizing ||
-            _resizeJustEnded ||
-            _directScrollUpdate
+        widget.dragging || widget.resizing || _resizeJustEnded
         ? Duration.zero
         : previewMotionActive && widget.duration != Duration.zero
         ? Motion.layoutTileReflow
@@ -839,6 +819,7 @@ class _DesktopAnimatedWindowPositionState
       duration: positionDuration,
       curve: _curve,
       rect: rect,
+      paintOffset: Offset(widget.overviewScrollOffset, 0.0),
       animationOrigin: _dragReleaseAnimationOrigin,
       // SUPER+A and SUPER+Tab retain the real window geometry. Their live
       // texture, frame, shadow, and hit-test region move as one composited

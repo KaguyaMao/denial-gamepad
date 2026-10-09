@@ -36,7 +36,7 @@ List<Widget> buildDesktopWindowLayers({
   required Map<int, GlobalKey> windowFrameKeys,
   required ValueChanged<DenialWindow> onActivateWindow,
   required ValueChanged<DenialWindow> onCloseWindow,
-  required ValueChanged<DenialWindow> onBackgroundWindow,
+  required ValueChanged<DenialWindow> onTerminateOverviewGroup,
   required ValueChanged<DenialWindow> onBeginOverviewDrag,
   required void Function(DenialWindow window, Offset delta)
   onUpdateOverviewDrag,
@@ -192,10 +192,10 @@ List<Widget> buildDesktopWindowLayers({
         selected: selected,
         windowRevealRegistry: windowRevealRegistry,
         onOverviewTap: () => onActivateWindow(window),
-        // The touch shell's upward swipe backgrounds the application, keeping
-        // its split arrangement; pointer desktops close it.
+        // Overview up-swipe terminates the native split group. The desktop's
+        // bottom-edge gesture remains a separate background/minimize action.
         onOverviewClose: () => (swipeOverviewUpCloses
-            ? onBackgroundWindow
+            ? onTerminateOverviewGroup
             : onCloseWindow)(window),
         onOverviewDragStart: () => onBeginOverviewDrag(window),
         onOverviewDragUpdate: (delta) => onUpdateOverviewDrag(window, delta),

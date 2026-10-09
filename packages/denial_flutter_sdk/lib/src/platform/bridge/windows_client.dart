@@ -90,6 +90,19 @@ final class BridgeWindowsClient {
     );
   }
 
+  /// Explicit touch-overview dismissal: terminate the application's process
+  /// and all applications in its native split layout, not merely minimize.
+  void terminateOverviewGroup(DenialWindow window) {
+    if (window.windowId <= 0) return;
+    _context.sendWire(
+      _context.codec.encodeWindowRequest(
+        wire.WindowRequestKind.CloseWindow,
+        windowId: window.windowId,
+        flags: 1,
+      ),
+    );
+  }
+
   /// Releases the native last-frame texture retained for a finished close
   /// animation. Native also owns a bounded watchdog, so a lost message cannot
   /// leak a client buffer or Flutter texture.

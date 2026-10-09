@@ -188,6 +188,7 @@ impl WaylandClientBudget {
             reservation_live: AtomicBool::new(true),
             peer_pid: None,
             peer_uid: None,
+            peer_pidfd: None,
         })
     }
 }
@@ -264,6 +265,7 @@ fn opaque_regions_signature(regions: Option<&[Rectangle<i32, Logical>]>) -> (usi
 pub(super) struct DenialClientState {
     pub(super) peer_pid: Option<i32>,
     pub(super) peer_uid: Option<u32>,
+    pub(super) peer_pidfd: Option<std::os::fd::OwnedFd>,
     compositor_state: CompositorClientState,
     budget: Option<Arc<WaylandClientBudget>>,
     surfaces: Mutex<HashSet<ObjectId>>,
@@ -279,6 +281,7 @@ impl Default for DenialClientState {
             reservation_live: AtomicBool::new(true),
             peer_pid: None,
             peer_uid: None,
+            peer_pidfd: None,
         }
     }
 }

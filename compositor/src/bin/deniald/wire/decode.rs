@@ -332,7 +332,11 @@ impl WireBridge {
                     return Err(WireError::Identity);
                 }
                 let command = match kind {
-                    fb::WindowRequestKind::CloseWindow => WindowCommand::Close { window_id },
+                    fb::WindowRequestKind::CloseWindow => match request.flags() {
+                        0 => WindowCommand::Close { window_id },
+                        1 => WindowCommand::TerminateOverviewGroup { window_id },
+                        _ => return Err(WireError::Flags),
+                    },
                     fb::WindowRequestKind::FocusWindow => WindowCommand::Focus { window_id },
                     fb::WindowRequestKind::ConfigureWindow => {
                         const EXACT: u32 = 1 << 0;

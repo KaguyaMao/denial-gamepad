@@ -283,6 +283,9 @@ class DenialBridge {
 
   void closeWindow(DenialWindow window) => _windows.closeWindow(window);
 
+  void terminateOverviewGroup(DenialWindow window) =>
+      _windows.terminateOverviewGroup(window);
+
   /// Releases the native last-frame texture retained for a finished close
   /// animation. Native also owns a bounded watchdog, so a lost message cannot
   /// leak a client buffer or Flutter texture.

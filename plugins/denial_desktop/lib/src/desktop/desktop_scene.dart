@@ -292,7 +292,7 @@ class DesktopScene extends ConsumerStatefulWidget {
     required this.onLaunchLocalApp,
     required this.onActivateWindow,
     required this.onCloseWindow,
-    required this.onBackgroundWindow,
+    required this.onTerminateOverviewGroup,
     required this.onOverviewBarrierTap,
     required this.onSelectOverviewWorkspace,
     required this.onBeginOverviewDrag,
@@ -333,7 +333,7 @@ class DesktopScene extends ConsumerStatefulWidget {
   final ValueChanged<LocalFlutterApplication> onLaunchLocalApp;
   final ValueChanged<DenialWindow> onActivateWindow;
   final ValueChanged<DenialWindow> onCloseWindow;
-  final ValueChanged<DenialWindow> onBackgroundWindow;
+  final ValueChanged<DenialWindow> onTerminateOverviewGroup;
   final ValueChanged<Offset> onOverviewBarrierTap;
   final void Function(int monitorId, int workspaceId) onSelectOverviewWorkspace;
   final ValueChanged<DenialWindow> onBeginOverviewDrag;
@@ -768,7 +768,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
     final onCancelPanelClose = widget.onCancelPanelClose;
     final onSchedulePanelClose = widget.onSchedulePanelClose;
     final onCloseWindow = widget.onCloseWindow;
-    final onBackgroundWindow = widget.onBackgroundWindow;
+    final onTerminateOverviewGroup = widget.onTerminateOverviewGroup;
     final onLaunchApp = widget.onLaunchApp;
     final onLaunchLocalApp = widget.onLaunchLocalApp;
     final onActivateWindow = widget.onActivateWindow;
@@ -817,7 +817,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
         windowFrameKeys: _windowFrameKeys,
         onActivateWindow: onActivateWindow,
         onCloseWindow: onCloseWindow,
-        onBackgroundWindow: onBackgroundWindow,
+        onTerminateOverviewGroup: onTerminateOverviewGroup,
         onBeginOverviewDrag: onBeginOverviewDrag,
         onUpdateOverviewDrag: onUpdateOverviewDrag,
         onEndOverviewDrag: onEndOverviewDrag,
@@ -962,7 +962,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                         windowFrameKeys: _windowFrameKeys,
                         onActivateWindow: onActivateWindow,
                         onCloseWindow: onCloseWindow,
-                        onBackgroundWindow: onBackgroundWindow,
+                        onTerminateOverviewGroup: onTerminateOverviewGroup,
                         onBeginOverviewDrag: onBeginOverviewDrag,
                         onUpdateOverviewDrag: onUpdateOverviewDrag,
                         onEndOverviewDrag: onEndOverviewDrag,
@@ -984,10 +984,6 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                 active: desktop.overviewActive,
                 onBarrierTap: onOverviewBarrierTap,
                 touchMode: gamepad,
-                cardFrames: gamepad
-                    ? desktop.overview?.frames.values.toList(growable: false) ??
-                          const <Rect>[]
-                    : const <Rect>[],
                 decoration: DesktopWorkspaceOverviewDeck(
                   desktop: desktop,
                   onSelectWorkspace: widget.onSelectOverviewWorkspace,
@@ -1041,7 +1037,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                         windowFrameKeys: _windowFrameKeys,
                         onActivateWindow: onActivateWindow,
                         onCloseWindow: onCloseWindow,
-                        onBackgroundWindow: onBackgroundWindow,
+                        onTerminateOverviewGroup: onTerminateOverviewGroup,
                         onBeginOverviewDrag: onBeginOverviewDrag,
                         onUpdateOverviewDrag: onUpdateOverviewDrag,
                         onEndOverviewDrag: onEndOverviewDrag,

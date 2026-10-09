@@ -108,7 +108,6 @@ class DesktopOverviewInputLayer extends StatelessWidget {
     this.onBarrierPan,
     this.onBarrierFling,
     this.onBarrierPanStart,
-    this.cardFrames = const <Rect>[],
     this.touchMode = false,
     super.key,
   });
@@ -129,11 +128,6 @@ class DesktopOverviewInputLayer extends StatelessWidget {
 
   /// Cancels a running strip fling when a new pan begins.
   final VoidCallback? onBarrierPanStart;
-
-  /// Presented overview card frames. A pan that starts on a card belongs to
-  /// that card (scroll or upward-swipe-to-background); only a pan that starts
-  /// on the background reaches the barrier.
-  final List<Rect> cardFrames;
 
   /// Touch profile: the overview publishes `gamepadOverview` so the compositor
   /// never treats its preview regions as client input targets.
@@ -163,7 +157,6 @@ class DesktopOverviewInputLayer extends StatelessWidget {
             onPan: onBarrierPan,
             onFling: onBarrierFling,
             onPanStart: onBarrierPanStart,
-            cardFrames: cardFrames,
           ),
         ),
         if (decoration case final decoration?)
@@ -181,7 +174,6 @@ class _DesktopOverviewBarrier extends StatelessWidget {
     this.onPan,
     this.onFling,
     this.onPanStart,
-    this.cardFrames = const <Rect>[],
   });
 
   final bool active;
@@ -189,28 +181,17 @@ class _DesktopOverviewBarrier extends StatelessWidget {
   final ValueChanged<Offset>? onPan;
   final ValueChanged<double>? onFling;
   final VoidCallback? onPanStart;
-  final List<Rect> cardFrames;
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       ignoring: !active,
       child: GestureDetector(
-        key: _barrierBoxKey,
         behavior: HitTestBehavior.opaque,
         onTapUp: (details) => onTap(details.localPosition),
-        // A pan that begins on a presented card belongs to that card: the card
-        // decides between horizontal strip scroll and the upward-swipe
-        // background gesture. Only a background pan reaches the barrier, so
-        // the two never split the same gesture in the arena.
-        onPanStart: onPanStart == null
-            ? null
-            : (details) {
-                if (_startsOnCard(details.globalPosition)) {
-                  return;
-                }
-                onPanStart!();
-              },
+        // Overview cards are in the foreground scene plane above this barrier.
+        // Their opaque hit regions own card pans; this receives background only.
+        onPanStart: onPanStart == null ? null : (_) => onPanStart!(),
         onPanUpdate: onPan == null ? null : (details) => onPan!(details.delta),
         onPanEnd: onFling == null
             ? null
@@ -218,23 +199,4 @@ class _DesktopOverviewBarrier extends StatelessWidget {
       ),
     );
   }
-
-  bool _startsOnCard(Offset globalPosition) {
-    if (cardFrames.isEmpty) {
-      return false;
-    }
-    final box = _barrierBoxKey.currentContext?.findRenderObject();
-    if (box is! RenderBox) {
-      return false;
-    }
-    final local = box.globalToLocal(globalPosition);
-    for (final frame in cardFrames) {
-      if (frame.contains(local)) {
-        return true;
-      }
-    }
-    return false;
-  }
 }
-
-final GlobalKey _barrierBoxKey = GlobalKey();

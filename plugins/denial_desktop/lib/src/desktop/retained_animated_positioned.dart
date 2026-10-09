@@ -15,6 +15,7 @@ class RetainedAnimatedPositioned extends ImplicitlyAnimatedWidget {
     required this.child,
     this.layoutRect,
     this.animationOrigin,
+    this.paintOffset = Offset.zero,
     this.globalClipRect,
     this.layoutDuringAnimation = false,
     required super.duration,
@@ -33,6 +34,9 @@ class RetainedAnimatedPositioned extends ImplicitlyAnimatedWidget {
   /// the transform can be removed while its absolute visual rectangle becomes
   /// the position tween's origin, avoiding a one-frame snap.
   final Rect? animationOrigin;
+
+  /// Viewport movement is applied after interpolation, never tweened per tile.
+  final Offset paintOffset;
 
   /// Keeps the retained child inside a stationary scene-space viewport.
   ///
@@ -79,7 +83,9 @@ class _RetainedAnimatedPositionedState
   @override
   Widget build(BuildContext context) {
     final destinationRect = widget.rect;
-    final visualRect = _rect?.evaluate(animation) ?? destinationRect;
+    final visualRect = (_rect?.evaluate(animation) ?? destinationRect).shift(
+      widget.paintOffset,
+    );
     final retainedRect = widget.layoutRect ?? destinationRect;
     final layoutRect = widget.layoutDuringAnimation ? visualRect : retainedRect;
     return Positioned.fill(

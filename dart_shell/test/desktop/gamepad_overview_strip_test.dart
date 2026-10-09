@@ -66,39 +66,6 @@ void main() {
     expect(second.width / second.height, closeTo(1200 / 749, 0.01));
   });
 
-  test('backgrounding a card removes it from the overview', () {
-    final container = ProviderContainer();
-    addTearDown(container.dispose);
-    final workspace = container.read(desktopWorkspaceProvider.notifier);
-    workspace.syncWindows(
-      <DenialWindow>[_window(1), _window(2)],
-      _size,
-      1,
-      snapshotSequence: 1,
-      windowLayout: DesktopWindowLayout.dwindle,
-      stripOverview: true,
-    );
-    workspace.toggleOverview(
-      monitorId: 0,
-      bounds: _bounds,
-      backgroundBounds: const Rect.fromLTWH(0, 0, 1200, 800),
-      objectIds: {1, 2},
-    );
-    expect(
-      container.read(desktopWorkspaceProvider).overview!.frames,
-      hasLength(2),
-    );
-
-    workspace.backgroundOverviewWindow(1);
-    final overview = container.read(desktopWorkspaceProvider).overview;
-    expect(
-      overview?.frames.containsKey(1),
-      false,
-      reason: 'a backgrounded card must leave the strip',
-    );
-    expect(overview?.frames.containsKey(2), true);
-  });
-
   test('strip scrolling pans freely and survives a live snapshot', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);
@@ -128,12 +95,13 @@ void main() {
         .overview!
         .scrollOffset;
     expect(scrolled, lessThan(0.0));
+    final frames = container.read(desktopWorkspaceProvider).overview!.frames;
 
     // A live snapshot re-arranges the strip; the user's pan must survive it.
     workspace.syncWindows(
       <DenialWindow>[
-        _window(1),
-        _window(2, minimized: true),
+        _window(1, x: 950, width: 80),
+        _window(2, minimized: true, x: 0, width: 250),
         _window(3),
         _window(4),
       ],
@@ -147,10 +115,20 @@ void main() {
       container.read(desktopWorkspaceProvider).overview!.scrollOffset,
       scrolled,
     );
+    expect(
+      container.read(desktopWorkspaceProvider).overview!.frames,
+      frames,
+      reason: 'live geometry must not reorder or resize scrolling columns',
+    );
   });
 }
 
-DenialWindow _window(int id, {bool minimized = false}) => DenialWindow(
+DenialWindow _window(
+  int id, {
+  bool minimized = false,
+  double x = 0,
+  double width = 1200,
+}) => DenialWindow(
   objectId: id,
   objectKind: 'xdg',
   surfaceId: id,
@@ -160,17 +138,17 @@ DenialWindow _window(int id, {bool minimized = false}) => DenialWindow(
   appId: 'app.$id',
   width: 1200,
   height: 749,
-  surfaceX: 0,
+  surfaceX: x,
   surfaceY: 51,
-  surfaceWidth: 1200,
+  surfaceWidth: width,
   surfaceHeight: 749,
   textureSourceX: 0,
   textureSourceY: 0,
   textureSourceWidth: 1200,
   textureSourceHeight: 749,
-  geometryX: 0,
+  geometryX: x,
   geometryY: 51,
-  geometryWidth: 1200,
+  geometryWidth: width,
   geometryHeight: 749,
   monitorId: 0,
   minimized: minimized,
