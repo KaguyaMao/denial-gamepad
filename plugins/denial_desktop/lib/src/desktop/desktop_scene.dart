@@ -984,6 +984,10 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                 active: desktop.overviewActive,
                 onBarrierTap: onOverviewBarrierTap,
                 touchMode: gamepad,
+                cardFrames: gamepad
+                    ? desktop.overview?.frames.values.toList(growable: false) ??
+                          const <Rect>[]
+                    : const <Rect>[],
                 decoration: DesktopWorkspaceOverviewDeck(
                   desktop: desktop,
                   onSelectWorkspace: widget.onSelectOverviewWorkspace,
