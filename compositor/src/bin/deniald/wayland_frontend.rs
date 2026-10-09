@@ -740,7 +740,17 @@ struct WindowGeometryIntent {
     target: Rectangle<i32, Logical>,
     authority: WindowGeometryAuthority,
     reassertion: WindowGeometryReassertion,
+    resends_remaining: u8,
 }
+
+/// Slow-starting clients (cold shader compile, heavy first frames on a
+/// handheld iGPU) can lag several commits behind a layout target. A touch
+/// tile that misses its first configure would otherwise be stranded at its
+/// initial size forever: one send, one report, then silence. Allow a small
+/// bounded number of re-sends before going silent. A healthy-but-slow client
+/// recovers on a later configure; a pathological looper is still capped at a
+/// handful of configures per contract, and a new target restarts the budget.
+const GEOMETRY_REASSERTION_RESENDS: u8 = 3;
 
 impl WindowGeometryIntent {
     fn for_contract(
@@ -748,15 +758,20 @@ impl WindowGeometryIntent {
         authority: WindowGeometryAuthority,
         previous: Option<Self>,
     ) -> Self {
-        let reassertion = previous
+        let (reassertion, resends_remaining) = previous
             .filter(|previous| previous.target == target && previous.authority == authority)
-            .map_or(WindowGeometryReassertion::Available, |previous| {
-                previous.reassertion
-            });
+            .map_or(
+                (
+                    WindowGeometryReassertion::Available,
+                    GEOMETRY_REASSERTION_RESENDS,
+                ),
+                |previous| (previous.reassertion, previous.resends_remaining),
+            );
         Self {
             target,
             authority,
             reassertion,
+            resends_remaining,
         }
     }
 
@@ -768,6 +783,10 @@ impl WindowGeometryIntent {
         match self.reassertion {
             WindowGeometryReassertion::Available => {
                 self.reassertion = WindowGeometryReassertion::Sent;
+                WindowGeometryReassertionAction::Send
+            }
+            WindowGeometryReassertion::Sent if self.resends_remaining > 0 => {
+                self.resends_remaining -= 1;
                 WindowGeometryReassertionAction::Send
             }
             WindowGeometryReassertion::Sent => {
@@ -834,6 +853,7 @@ mod window_geometry_intent_tests {
             target: Rectangle::new((10, 20).into(), (800, 600).into()),
             authority,
             reassertion: WindowGeometryReassertion::Available,
+            resends_remaining: GEOMETRY_REASSERTION_RESENDS,
         }
     }
 
@@ -901,16 +921,28 @@ mod window_geometry_intent_tests {
             intent.claim_reassertion(),
             WindowGeometryReassertionAction::Send
         );
-        // A real mismatch still gets only one retry, even if an empty commit
-        // follows it. Preserve the configure-loop protection for live clients.
+        // A real mismatch still gets bounded retries, even if an empty commit
+        // follows it. Preserve the configure-loop protection for live clients:
+        // slow starters recover on a later configure, pathological loopers go
+        // silent after the budget is spent.
         assert!(!committed_size_requires_reassertion(
             intent.target.size,
             None,
             Size::from((0, 0)),
         ));
+        for _ in 0..GEOMETRY_REASSERTION_RESENDS {
+            assert_eq!(
+                intent.claim_reassertion(),
+                WindowGeometryReassertionAction::Send
+            );
+        }
         assert_eq!(
             intent.claim_reassertion(),
             WindowGeometryReassertionAction::ReportSuppressed
+        );
+        assert_eq!(
+            intent.claim_reassertion(),
+            WindowGeometryReassertionAction::Suppress
         );
     }
 
@@ -926,12 +958,16 @@ mod window_geometry_intent_tests {
     }
 
     #[test]
-    fn one_geometry_contract_can_only_reassert_once() {
+    fn one_geometry_contract_reasserts_a_bounded_number_of_times() {
         let mut intent = intent(WindowGeometryAuthority::Layout);
-        assert_eq!(
-            intent.claim_reassertion(),
-            WindowGeometryReassertionAction::Send
-        );
+        // One initial send plus bounded resends for slow starters; then one
+        // report and silence. A pathological looper can never storm configures.
+        for _ in 0..=GEOMETRY_REASSERTION_RESENDS {
+            assert_eq!(
+                intent.claim_reassertion(),
+                WindowGeometryReassertionAction::Send
+            );
+        }
         assert_eq!(
             intent.claim_reassertion(),
             WindowGeometryReassertionAction::ReportSuppressed
@@ -943,8 +979,40 @@ mod window_geometry_intent_tests {
     }
 
     #[test]
-    fn unchanged_geometry_contract_preserves_its_reassertion_guard() {
-        let target = Rectangle::new((10, 20).into(), (800, 600).into());
+    fn slow_starting_client_recovers_before_the_budget_runs_out() {
+        // A cold client (heavy first frames) lags its tile target for several
+        // commits, then catches up. Bounded resends must keep offering the
+        // target until the matching commit releases a one-shot contract.
+        let target = Size::from((1104, 642));
+        let mut intent = WindowGeometryIntent {
+            target: Rectangle::new((17, 52).into(), target),
+            authority: WindowGeometryAuthority::Pending,
+            reassertion: WindowGeometryReassertion::Available,
+            resends_remaining: GEOMETRY_REASSERTION_RESENDS,
+        };
+        let lagging = Size::from((1104, 429));
+        for _ in 0..=GEOMETRY_REASSERTION_RESENDS {
+            assert!(committed_size_requires_reassertion(
+                intent.target.size,
+                None,
+                lagging,
+            ));
+            assert_eq!(
+                intent.claim_reassertion(),
+                WindowGeometryReassertionAction::Send
+            );
+            assert!(intent.retained_after_commit(lagging));
+        }
+        assert!(!committed_size_requires_reassertion(
+            intent.target.size,
+            None,
+            target,
+        ));
+        assert!(!intent.retained_after_commit(target));
+    }
+
+    #[test]
+    fn unchanged_geometry_contract_preserves_its_reassertion_guard() {        let target = Rectangle::new((10, 20).into(), (800, 600).into());
         let mut previous =
             WindowGeometryIntent::for_contract(target, WindowGeometryAuthority::Layout, None);
         assert_eq!(
@@ -958,6 +1026,10 @@ mod window_geometry_intent_tests {
             Some(previous),
         );
         assert_eq!(unchanged.reassertion, WindowGeometryReassertion::Sent);
+        assert_eq!(
+            unchanged.resends_remaining,
+            GEOMETRY_REASSERTION_RESENDS
+        );
 
         let changed = WindowGeometryIntent::for_contract(
             Rectangle::new((10, 20).into(), (900, 600).into()),
@@ -965,6 +1037,7 @@ mod window_geometry_intent_tests {
             Some(previous),
         );
         assert_eq!(changed.reassertion, WindowGeometryReassertion::Available);
+        assert_eq!(changed.resends_remaining, GEOMETRY_REASSERTION_RESENDS);
     }
 }
 
