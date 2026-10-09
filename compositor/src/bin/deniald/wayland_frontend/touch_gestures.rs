@@ -1532,17 +1532,24 @@ fn apply_edge_resize(
             .as_mut()
             .expect("missing Wayland frontend")
             .resize_layout_window(&window, edges, delta_x, delta_y);
-        // A resize that squeezes a sibling pane out of existence backgrounds
-        // that sibling and hands its space to the resized window.
+        // A resize that squeezes a pane out of existence backgrounds it. This
+        // includes the dragged window itself: dragging its own border until it
+        // is (almost) gone closes it to the background, for both a split pane
+        // and a lone exclusive tile.
         let squeezed = state
             .wayland
             .as_ref()
             .expect("missing Wayland frontend")
             .layout_siblings_squeezed_out(&window);
         for squeezed_id in squeezed {
-            if squeezed_id != window_id {
-                window_management::minimize_toplevel_by_id(state, squeezed_id);
-            }
+            // Forget the shrunken lone-tile geometry so a later restore
+            // returns a full tile instead of the collapsed rectangle.
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .forget_gamepad_single_geometry(squeezed_id);
+            window_management::minimize_toplevel_by_id(state, squeezed_id);
         }
     }
     // Read the placements after any evictions so the collapsed layout is the

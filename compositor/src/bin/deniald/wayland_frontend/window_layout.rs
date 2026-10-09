@@ -740,6 +740,21 @@ impl WaylandFrontend {
         Some(vec![(window.clone(), self.window_geometry_target(window))])
     }
 
+    /// Drops a lone tile's remembered geometry. Used when a resize evicts the
+    /// tile so a later restore returns a full tile, not the collapsed frame.
+    #[cfg(feature = "flutter")]
+    pub(crate) fn forget_gamepad_single_geometry(&mut self, window_id: u64) {
+        let Some(window) = self.window_for_id(window_id) else {
+            return;
+        };
+        let Some(root) = self.window_root_surface(&window) else {
+            return;
+        };
+        if let Some(record) = self.window_record_for_surface_mut(&root.id()) {
+            record.gamepad_single_geometry = None;
+        }
+    }
+
     /// Touch admission. When the target workspace still has free space the new
     /// window tiles in beside the existing ones; once the workspace is full the
     /// new window replaces every existing one and owns the whole work area.
@@ -795,11 +810,7 @@ impl WaylandFrontend {
             return Vec::new();
         };
         let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
-        let extent = i64::from(work_area.size.w).max(i64::from(work_area.size.h));
-        // A tile's minimum size is 64px, so the eviction threshold must sit
-        // comfortably above it; otherwise a pane pinned at its minimum would
-        // never be considered squeezed.
-        let threshold = (extent / 10).max(96);
+        let threshold = gamepad_squeeze_threshold(work_area);
         self.current_layout_placements()
             .into_iter()
             .filter(|placement| self.window_layout.space_for(&placement.window) == Some(space))
@@ -1970,6 +1981,15 @@ fn visible_stacking_restore(
     saved
 }
 
+/// A tile narrower or shorter than this is considered squeezed out and is
+/// backgrounded by the resize path. It sits above the 64px tile minimum so a
+/// pane pinned at its minimum is still detected as squeezed.
+#[cfg(feature = "flutter")]
+fn gamepad_squeeze_threshold(work_area: Rectangle<i32, Logical>) -> i64 {
+    let extent = i64::from(work_area.size.w).max(i64::from(work_area.size.h));
+    (extent / 10).max(96)
+}
+
 /// True when the gamepad workspace's visible tiles leave usable free space, so
 /// the next application tiles in instead of replacing the whole workspace.
 /// Dwindle tiles never overlap, so comparing summed areas to the work area is
@@ -2117,6 +2137,12 @@ mod tests {
             0.0,
         );
         assert_eq!(clamped, rect(1152, 51, 64, 700));
+        // The single-tile minimum sits below the squeeze threshold, so dragging
+        // a lone tile to its minimum evicts it just like a split pane.
+        assert!(
+            i64::from(clamped.size.w) <= gamepad_squeeze_threshold(bounds),
+            "a collapsed lone tile must be detectable as squeezed"
+        );
     }
 
     #[test]
