@@ -33,6 +33,10 @@ pub(super) struct WindowRecord {
     /// the full work area. Cleared when the tile joins a split.
     #[cfg(feature = "flutter")]
     pub(super) gamepad_single_geometry: Option<Rectangle<i32, Logical>>,
+    /// The lone tile's geometry captured at the start of a resize drag, so an
+    /// eviction can restore the pre-drag size instead of the squeezed sliver.
+    #[cfg(feature = "flutter")]
+    pub(super) gamepad_single_snapshot: Option<Option<Rectangle<i32, Logical>>>,
     pub(super) layout_insertion_anchor: Option<ObjectId>,
     pub(super) restored_position: bool,
     pub(super) client_geometry_state_requested: bool,

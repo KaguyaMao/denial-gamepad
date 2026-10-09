@@ -107,6 +107,7 @@ class DesktopOverviewInputLayer extends StatelessWidget {
     this.decoration,
     this.onBarrierPan,
     this.onBarrierFling,
+    this.onBarrierPanStart,
     this.touchMode = false,
     super.key,
   });
@@ -124,6 +125,9 @@ class DesktopOverviewInputLayer extends StatelessWidget {
 
   /// Horizontal release velocity for strip inertia, in logical pixels/second.
   final ValueChanged<double>? onBarrierFling;
+
+  /// Cancels a running strip fling when a new pan begins.
+  final VoidCallback? onBarrierPanStart;
 
   /// Touch profile: the overview publishes `gamepadOverview` so the compositor
   /// never treats its preview regions as client input targets.
@@ -152,6 +156,7 @@ class DesktopOverviewInputLayer extends StatelessWidget {
             onTap: onBarrierTap,
             onPan: onBarrierPan,
             onFling: onBarrierFling,
+            onPanStart: onBarrierPanStart,
           ),
         ),
         if (decoration case final decoration?)
@@ -168,12 +173,14 @@ class _DesktopOverviewBarrier extends StatelessWidget {
     required this.onTap,
     this.onPan,
     this.onFling,
+    this.onPanStart,
   });
 
   final bool active;
   final ValueChanged<Offset> onTap;
   final ValueChanged<Offset>? onPan;
   final ValueChanged<double>? onFling;
+  final VoidCallback? onPanStart;
 
   @override
   Widget build(BuildContext context) {
@@ -182,6 +189,7 @@ class _DesktopOverviewBarrier extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapUp: (details) => onTap(details.localPosition),
+        onPanStart: onPanStart == null ? null : (_) => onPanStart!(),
         onPanUpdate: onPan == null ? null : (details) => onPan!(details.delta),
         onPanEnd: onFling == null
             ? null

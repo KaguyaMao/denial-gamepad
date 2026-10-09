@@ -51,6 +51,7 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
     required this.onDragEnd,
     required this.onDragCancel,
     this.onFling,
+    this.onPanStart,
     required this.child,
   });
 
@@ -73,6 +74,10 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
 
   /// Horizontal release velocity (logical pixels/second) for strip inertia.
   final ValueChanged<double>? onFling;
+
+  /// Called when a drag begins, before any axis decision. The scene cancels a
+  /// running strip fling here so a new pan never fights the decaying one.
+  final VoidCallback? onPanStart;
   final Widget child;
 
   @override
@@ -111,6 +116,7 @@ class _DesktopOverviewPreviewInteractionState
   void _startDrag(DragStartDetails details) {
     _lastGlobalDragPosition = details.globalPosition;
     _swipeTravel = Offset.zero;
+    widget.onPanStart?.call();
     if (widget.swipeUpCloses) {
       return;
     }

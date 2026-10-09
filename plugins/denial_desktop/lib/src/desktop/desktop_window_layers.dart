@@ -36,6 +36,7 @@ List<Widget> buildDesktopWindowLayers({
   required Map<int, GlobalKey> windowFrameKeys,
   required ValueChanged<DenialWindow> onActivateWindow,
   required ValueChanged<DenialWindow> onCloseWindow,
+  required ValueChanged<DenialWindow> onBackgroundWindow,
   required ValueChanged<DenialWindow> onBeginOverviewDrag,
   required void Function(DenialWindow window, Offset delta)
   onUpdateOverviewDrag,
@@ -45,6 +46,7 @@ List<Widget> buildDesktopWindowLayers({
   Map<int, Rect> overviewDepartingFrames = const <int, Rect>{},
   bool swipeOverviewUpCloses = false,
   ValueChanged<double>? onOverviewFling,
+  VoidCallback? onOverviewPanStart,
 }) {
   final layers = <Widget>[];
   for (final placement in placements) {
@@ -190,13 +192,18 @@ List<Widget> buildDesktopWindowLayers({
         selected: selected,
         windowRevealRegistry: windowRevealRegistry,
         onOverviewTap: () => onActivateWindow(window),
-        onOverviewClose: () => onCloseWindow(window),
+        // The touch shell's upward swipe backgrounds the application, keeping
+        // its split arrangement; pointer desktops close it.
+        onOverviewClose: () => (swipeOverviewUpCloses
+            ? onBackgroundWindow
+            : onCloseWindow)(window),
         onOverviewDragStart: () => onBeginOverviewDrag(window),
         onOverviewDragUpdate: (delta) => onUpdateOverviewDrag(window, delta),
         onOverviewDragEnd: () => onEndOverviewDrag(window),
         onOverviewDragCancel: () => onCancelOverviewDrag(window),
         swipeOverviewUpCloses: swipeOverviewUpCloses,
         onOverviewFling: onOverviewFling,
+        onOverviewPanStart: onOverviewPanStart,
       ),
     );
     if (!desktopWidget && !departing) {

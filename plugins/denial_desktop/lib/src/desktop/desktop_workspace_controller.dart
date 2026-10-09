@@ -512,6 +512,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
             items: overviewItems,
             bounds: nextOverview.bounds,
             strip: _stripOverview,
+            stripAspectRatio: _stripOverviewAspect(nextOverview.bounds),
           ),
         );
         for (final placement in next.values) {
@@ -649,6 +650,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       items: items,
       bounds: bounds,
       strip: _stripOverview,
+      stripAspectRatio: _stripOverviewAspect(bounds),
     );
     if (frames.isEmpty) {
       return;
@@ -1077,6 +1079,15 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       right = math.max(right, frame.right);
     }
     return math.max(0.0, right - overview.bounds.right);
+  }
+
+  /// The exclusive-application shape used by every touch strip card, so a
+  /// split pane is not drawn as a narrow sliver.
+  double? _stripOverviewAspect(Rect bounds) {
+    if (!_stripOverview || bounds.height <= 0.0) {
+      return null;
+    }
+    return (bounds.width / bounds.height).clamp(0.32, 3.6).toDouble();
   }
 
   bool endOverviewDrag(

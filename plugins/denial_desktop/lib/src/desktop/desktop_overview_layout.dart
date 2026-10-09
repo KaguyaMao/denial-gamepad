@@ -44,6 +44,7 @@ abstract final class DesktopOverviewLayout {
     required List<DesktopOverviewItem> items,
     required Rect bounds,
     bool strip = false,
+    double? stripAspectRatio,
   }) {
     final usefulItems = items
         .where((item) => isUsefulPreview(item.frame))
@@ -65,7 +66,7 @@ abstract final class DesktopOverviewLayout {
     _sortSpatially(ordered, available);
 
     if (strip) {
-      return _arrangeStrip(ordered, available);
+      return _arrangeStrip(ordered, available, stripAspectRatio);
     }
 
     _OverviewCandidate? best;
@@ -79,16 +80,21 @@ abstract final class DesktopOverviewLayout {
     return best?.frames ?? const <int, Rect>{};
   }
 
-  /// One horizontally scrolling row of natural-aspect cards.
+  /// One horizontally scrolling row of cards.
   ///
-  /// Touch-first shells present overview as a strip: every card keeps its own
-  /// shape at a readable height, the row is centred while it fits, and it
-  /// overflows the bounds rather than shrinking cards once it does not.
+  /// Touch-first shells present overview as a strip: the row is centred while
+  /// it fits and overflows the bounds rather than shrinking cards once it does
+  /// not. When [uniformAspectRatio] is given (the touch profile), every card
+  /// uses that shape — the exclusive-application size — so a split pane is not
+  /// drawn as a narrow sliver next to a full-screen tile.
   static Map<int, Rect> _arrangeStrip(
     List<DesktopOverviewItem> items,
     Rect available,
+    double? uniformAspectRatio,
   ) {
     final height = available.height.clamp(1.0, 0.72 * available.height);
+    double aspectOf(DesktopOverviewItem item) =>
+        uniformAspectRatio ?? item.aspectRatio;
     final naturalHeights = <double>[
       for (final item in items)
         math.min(
@@ -104,7 +110,7 @@ abstract final class DesktopOverviewLayout {
     final maxHeight = heights.reduce(math.max);
     var rowWidth = 0.0;
     for (var index = 0; index < items.length; index += 1) {
-      rowWidth += items[index].aspectRatio * heights[index];
+      rowWidth += aspectOf(items[index]) * heights[index];
     }
     rowWidth += gap * math.max(0, items.length - 1);
 
@@ -119,7 +125,7 @@ abstract final class DesktopOverviewLayout {
       final frame = Rect.fromLTWH(
         left,
         top + (maxHeight - cardHeight) / 2.0,
-        item.aspectRatio * cardHeight,
+        aspectOf(item) * cardHeight,
         cardHeight,
       );
       frames[item.objectId] = frame;

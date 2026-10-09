@@ -35,6 +35,37 @@ void main() {
     expect(right, greaterThan(_bounds.right));
   });
 
+  test('every strip card uses the exclusive-application shape', () {
+    final items = <DesktopOverviewItem>[
+      DesktopOverviewItem(
+        objectId: 1,
+        frame: const Rect.fromLTWH(0, 51, 1200, 749),
+        z: 1,
+      ),
+      // A split pane is a narrow sliver on the desktop.
+      DesktopOverviewItem(
+        objectId: 2,
+        frame: const Rect.fromLTWH(600, 51, 300, 749),
+        z: 2,
+      ),
+    ];
+    final uniform = DesktopOverviewLayout.arrange(
+      items: items,
+      bounds: _bounds,
+      strip: true,
+      stripAspectRatio: _bounds.width / _bounds.height,
+    );
+    expect(uniform, hasLength(2));
+    // Both cards share one aspect ratio, so the split pane is not a sliver.
+    final first = uniform[1]!;
+    final second = uniform[2]!;
+    expect(
+      (first.width / first.height - second.width / second.height).abs(),
+      lessThan(0.001),
+    );
+    expect(second.width / second.height, closeTo(1200 / 749, 0.01));
+  });
+
   test('strip scrolling pans freely and survives a live snapshot', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);

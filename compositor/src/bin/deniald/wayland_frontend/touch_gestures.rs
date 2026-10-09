@@ -1525,6 +1525,12 @@ fn apply_edge_resize(
     if phase == WindowPlacementPhase::Begin {
         release_geometry_constraints(state, &window);
         window_management::activate_window(state, &window, SERIAL_COUNTER.next_serial());
+        // Capture the pre-drag geometry so an eviction can restore it.
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .snapshot_gamepad_single_geometry(window_id);
     }
     if phase == WindowPlacementPhase::Update {
         state
@@ -1542,13 +1548,13 @@ fn apply_edge_resize(
             .expect("missing Wayland frontend")
             .layout_siblings_squeezed_out(&window);
         for squeezed_id in squeezed {
-            // Forget the shrunken lone-tile geometry so a later restore
-            // returns a full tile instead of the collapsed rectangle.
+            // Restore the pre-drag geometry so a later restore returns the
+            // tile's size before the drag, not the squeezed sliver.
             state
                 .wayland
                 .as_mut()
                 .expect("missing Wayland frontend")
-                .forget_gamepad_single_geometry(squeezed_id);
+                .restore_gamepad_single_geometry(squeezed_id);
             window_management::minimize_toplevel_by_id(state, squeezed_id);
         }
     }

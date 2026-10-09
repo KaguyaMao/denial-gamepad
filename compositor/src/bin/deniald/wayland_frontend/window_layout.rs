@@ -740,10 +740,10 @@ impl WaylandFrontend {
         Some(vec![(window.clone(), self.window_geometry_target(window))])
     }
 
-    /// Drops a lone tile's remembered geometry. Used when a resize evicts the
-    /// tile so a later restore returns a full tile, not the collapsed frame.
+    /// Captures the lone tile's geometry at the start of a resize drag so an
+    /// eviction can restore the pre-drag size.
     #[cfg(feature = "flutter")]
-    pub(crate) fn forget_gamepad_single_geometry(&mut self, window_id: u64) {
+    pub(crate) fn snapshot_gamepad_single_geometry(&mut self, window_id: u64) {
         let Some(window) = self.window_for_id(window_id) else {
             return;
         };
@@ -751,7 +751,24 @@ impl WaylandFrontend {
             return;
         };
         if let Some(record) = self.window_record_for_surface_mut(&root.id()) {
-            record.gamepad_single_geometry = None;
+            record.gamepad_single_snapshot = Some(record.gamepad_single_geometry);
+        }
+    }
+
+    /// Restores the geometry captured by [Self::snapshot_gamepad_single_geometry]
+    /// when a resize evicts the dragged tile.
+    #[cfg(feature = "flutter")]
+    pub(crate) fn restore_gamepad_single_geometry(&mut self, window_id: u64) {
+        let Some(window) = self.window_for_id(window_id) else {
+            return;
+        };
+        let Some(root) = self.window_root_surface(&window) else {
+            return;
+        };
+        if let Some(record) = self.window_record_for_surface_mut(&root.id())
+            && let Some(snapshot) = record.gamepad_single_snapshot.take()
+        {
+            record.gamepad_single_geometry = snapshot;
         }
     }
 

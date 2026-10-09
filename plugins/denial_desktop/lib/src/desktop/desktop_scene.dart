@@ -292,6 +292,7 @@ class DesktopScene extends ConsumerStatefulWidget {
     required this.onLaunchLocalApp,
     required this.onActivateWindow,
     required this.onCloseWindow,
+    required this.onBackgroundWindow,
     required this.onOverviewBarrierTap,
     required this.onSelectOverviewWorkspace,
     required this.onBeginOverviewDrag,
@@ -332,6 +333,7 @@ class DesktopScene extends ConsumerStatefulWidget {
   final ValueChanged<LocalFlutterApplication> onLaunchLocalApp;
   final ValueChanged<DenialWindow> onActivateWindow;
   final ValueChanged<DenialWindow> onCloseWindow;
+  final ValueChanged<DenialWindow> onBackgroundWindow;
   final ValueChanged<Offset> onOverviewBarrierTap;
   final void Function(int monitorId, int workspaceId) onSelectOverviewWorkspace;
   final ValueChanged<DenialWindow> onBeginOverviewDrag;
@@ -399,6 +401,15 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
     _overviewFling = createTicker(_onOverviewFlingTick);
   }
 
+  /// Stops the touch strip's inertia so a new pan never fights the decaying
+  /// one. Called on every pan start, on cards and on the background.
+  void _stopOverviewFling() {
+    if (_overviewFling.isActive) {
+      _overviewFling.stop();
+    }
+    _overviewFlingVelocity = 0.0;
+  }
+
   /// Continues a touch overview pan after release, like a scroll fling.
   void _flingOverview(double velocity) {
     if (!widget.desktop.overviewActive) {
@@ -408,8 +419,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
       return;
     }
     _overviewFlingVelocity = velocity;
-    _overviewFlingElapsed = Duration.zero;
     if (!_overviewFling.isActive) {
+      _overviewFlingElapsed = Duration.zero;
       _overviewFling.start();
     }
   }
@@ -757,6 +768,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
     final onCancelPanelClose = widget.onCancelPanelClose;
     final onSchedulePanelClose = widget.onSchedulePanelClose;
     final onCloseWindow = widget.onCloseWindow;
+    final onBackgroundWindow = widget.onBackgroundWindow;
     final onLaunchApp = widget.onLaunchApp;
     final onLaunchLocalApp = widget.onLaunchLocalApp;
     final onActivateWindow = widget.onActivateWindow;
@@ -805,6 +817,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
         windowFrameKeys: _windowFrameKeys,
         onActivateWindow: onActivateWindow,
         onCloseWindow: onCloseWindow,
+        onBackgroundWindow: onBackgroundWindow,
         onBeginOverviewDrag: onBeginOverviewDrag,
         onUpdateOverviewDrag: onUpdateOverviewDrag,
         onEndOverviewDrag: onEndOverviewDrag,
@@ -949,6 +962,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                         windowFrameKeys: _windowFrameKeys,
                         onActivateWindow: onActivateWindow,
                         onCloseWindow: onCloseWindow,
+                        onBackgroundWindow: onBackgroundWindow,
                         onBeginOverviewDrag: onBeginOverviewDrag,
                         onUpdateOverviewDrag: onUpdateOverviewDrag,
                         onEndOverviewDrag: onEndOverviewDrag,
@@ -957,6 +971,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                         overviewDepartingFrames: _overviewDepartingFrames,
                         swipeOverviewUpCloses: gamepad,
                         onOverviewFling: gamepad ? _flingOverview : null,
+                        onOverviewPanStart: gamepad ? _stopOverviewFling : null,
                       ),
                     ),
                   ),
@@ -979,6 +994,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                           .moveOverviewBy(-1, delta)
                     : null,
                 onBarrierFling: gamepad ? _flingOverview : null,
+                onBarrierPanStart: gamepad ? _stopOverviewFling : null,
                 foregroundControls: <Widget>[
                   surfacePlane(ShellSurfaceLayer.desktopControls),
                 ],
@@ -1021,6 +1037,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                         windowFrameKeys: _windowFrameKeys,
                         onActivateWindow: onActivateWindow,
                         onCloseWindow: onCloseWindow,
+                        onBackgroundWindow: onBackgroundWindow,
                         onBeginOverviewDrag: onBeginOverviewDrag,
                         onUpdateOverviewDrag: onUpdateOverviewDrag,
                         onEndOverviewDrag: onEndOverviewDrag,
@@ -1029,6 +1046,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                         overviewDepartingFrames: _overviewDepartingFrames,
                         swipeOverviewUpCloses: gamepad,
                         onOverviewFling: gamepad ? _flingOverview : null,
+                        onOverviewPanStart: gamepad ? _stopOverviewFling : null,
                       ),
                     ),
                   ),

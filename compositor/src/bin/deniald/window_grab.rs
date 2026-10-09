@@ -735,7 +735,7 @@ impl PointerGrab<RuntimeState> for TileResizeGrab {
             data.wayland
                 .as_mut()
                 .expect("missing Wayland frontend")
-                .forget_gamepad_single_geometry(window_id);
+                .restore_gamepad_single_geometry(window_id);
             super::wayland_frontend::minimize_toplevel_by_id(data, window_id);
         }
         data.scene_sync.mark_dirty();

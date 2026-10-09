@@ -166,6 +166,7 @@ class DesktopWindowFrame extends ConsumerWidget {
     required this.onOverviewDragEnd,
     required this.onOverviewDragCancel,
     this.onOverviewFling,
+    this.onOverviewPanStart,
     this.swipeOverviewUpCloses = false,
   });
 
@@ -199,6 +200,9 @@ class DesktopWindowFrame extends ConsumerWidget {
 
   /// Horizontal release velocity for touch overview strip inertia.
   final ValueChanged<double>? onOverviewFling;
+
+  /// Cancels a running strip fling when a new card drag begins.
+  final VoidCallback? onOverviewPanStart;
 
   /// Touch overview: upward swipe on a card closes it.
   final bool swipeOverviewUpCloses;
@@ -418,6 +422,7 @@ class DesktopWindowFrame extends ConsumerWidget {
                         onDragEnd: onOverviewDragEnd,
                         onDragCancel: onOverviewDragCancel,
                         onFling: onOverviewFling,
+                        onPanStart: onOverviewPanStart,
                         child: Builder(
                           builder: (context) {
                             final client = _DesktopWindowContent(

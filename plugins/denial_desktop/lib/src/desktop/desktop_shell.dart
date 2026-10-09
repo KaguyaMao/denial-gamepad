@@ -615,6 +615,19 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     showPowerSessionSurface(ref);
   }
 
+  /// Sends an application to the background through the managed minimize path.
+  /// Used by the touch overview's upward swipe, which preserves the split
+  /// arrangement instead of terminating the process.
+  void _backgroundWindow(DenialWindow window) {
+    ref
+        .read(denialBridgeProvider)
+        .configureWindow(
+          window,
+          window.presentationCoordinateRect,
+          minimize: true,
+        );
+  }
+
   void _openSettingsPage(SettingsPageId? page) {
     final environment = ref.read(startupEnvironmentProvider);
     _closePanels();
@@ -1014,6 +1027,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
               onCloseWindow: ref
                   .read(referenceShellProvider.notifier)
                   .closeWindow,
+              onBackgroundWindow: _backgroundWindow,
               onOverviewBarrierTap: _handleOverviewBarrierTap,
               onSelectOverviewWorkspace: _selectOverviewWorkspace,
               onBeginOverviewDrag: _beginOverviewDrag,

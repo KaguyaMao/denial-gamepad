@@ -33,6 +33,7 @@ Widget buildDesktopWindowsOnlyScene({
   required Map<int, GlobalKey> windowFrameKeys,
   required ValueChanged<DenialWindow> onActivateWindow,
   required ValueChanged<DenialWindow> onCloseWindow,
+  ValueChanged<DenialWindow>? onBackgroundWindow,
   required ValueChanged<DenialWindow> onBeginOverviewDrag,
   required void Function(DenialWindow window, Offset delta)
   onUpdateOverviewDrag,
@@ -89,6 +90,7 @@ Widget buildDesktopWindowsOnlyScene({
         windowFrameKeys: windowFrameKeys,
         onActivateWindow: onActivateWindow,
         onCloseWindow: onCloseWindow,
+        onBackgroundWindow: onBackgroundWindow ?? onCloseWindow,
         onBeginOverviewDrag: onBeginOverviewDrag,
         onUpdateOverviewDrag: onUpdateOverviewDrag,
         onEndOverviewDrag: onEndOverviewDrag,

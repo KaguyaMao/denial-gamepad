@@ -1328,6 +1328,16 @@ pub(super) fn begin_super_pointer_grab(
             SuperPointerAction::Resize => {
                 let edges =
                     LayoutResizeEdges::from_pointer(position, geometry, scrolling_resize_axis);
+                if let Some(frontend) = state.wayland.as_mut()
+                    && frontend.gamepad_shell()
+                    && let Some(window_id) = frontend
+                        .window_root_surface(&window)
+                        .and_then(|root| frontend.surface_id(&root))
+                {
+                    // Capture the pre-drag lone-tile geometry so an eviction can
+                    // restore it instead of the squeezed sliver.
+                    frontend.snapshot_gamepad_single_geometry(window_id);
+                }
                 pointer.set_grab(
                     state,
                     TileResizeGrab::new(start_data, window, edges),
