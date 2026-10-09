@@ -159,6 +159,12 @@ impl WaylandFrontend {
         let mut bottom = inset(SystemBarSide::Bottom);
         let mut left = inset(SystemBarSide::Left);
         let mut right = inset(SystemBarSide::Right);
+        #[cfg(feature = "flutter")]
+        if self.gamepad_shell {
+            // The touch software keyboard splits the screen with the focused
+            // tile instead of covering it.
+            bottom = bottom.saturating_add(self.gamepad_keyboard_inset(geometry));
+        }
         // Misconfigured insets must never consume the whole output.
         let height_budget = (geometry.size.h - 1).max(0);
         top = top.min(height_budget);
@@ -172,6 +178,47 @@ impl WaylandFrontend {
         area.size.w -= left + right;
         area.size.h -= top + bottom;
         area
+    }
+
+    /// Height the touch software keyboard reserves at the bottom of `geometry`.
+    ///
+    /// The shell publishes its keyboard rect in the input layout; the touch
+    /// profile turns it into a bottom inset so the focused tile splits the
+    /// screen with the keyboard rather than being covered by it.
+    #[cfg(feature = "flutter")]
+    fn gamepad_keyboard_inset(&self, geometry: Rectangle<i32, Logical>) -> i32 {
+        let Some(layout) = self.input_layout.as_ref() else {
+            return 0;
+        };
+        let origin = self.atlas_origin;
+        let mut inset = 0;
+        for region in &layout.software_keyboard_regions {
+            if !region.width.is_finite()
+                || !region.height.is_finite()
+                || region.width <= 0.0
+                || region.height <= 0.0
+            {
+                continue;
+            }
+            // A keyboard panel spans most of the output width and is anchored
+            // to the bottom edge; the narrow scroll strip is ignored.
+            if region.width < f64::from(geometry.size.w) * 0.5 {
+                continue;
+            }
+            let rect_left = region.x + origin.x;
+            let rect_top = region.y + origin.y;
+            let rect_bottom = rect_top + region.height;
+            let output_bottom = f64::from(geometry.loc.y + geometry.size.h);
+            if rect_bottom < output_bottom - 4.0 {
+                continue;
+            }
+            // The inset is measured from the region's top to the output bottom.
+            let height = (output_bottom - rect_top).max(0.0);
+            let _ = rect_left;
+            let height = height.min(f64::from(geometry.size.h) / 2.0);
+            inset = inset.max(height.round() as i32);
+        }
+        inset
     }
 
     pub(crate) fn set_work_area(&mut self, work_area: crate::options::WorkAreaOptions) {

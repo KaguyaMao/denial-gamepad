@@ -253,6 +253,19 @@ class DesktopWindowFrame extends ConsumerWidget {
             livePlacementFrame: placement.frame,
           )
         : this.frame;
+    // The touch overview strip scrolls as a whole. Reading the offset here
+    // (instead of rebuilding the scene) keeps a pan cheap and lets the cards
+    // follow the finger directly.
+    final overviewScroll = overview
+        ? ref.watch(
+            desktopWorkspaceProvider.select(
+              (state) => state.overview?.scrollOffset ?? 0.0,
+            ),
+          )
+        : 0.0;
+    final scrolledFrame = overviewScroll == 0.0
+        ? liveFrame
+        : liveFrame.shift(Offset(overviewScroll, 0.0));
     final devicePixelRatio =
         outputPixelGrid?.scale ?? MediaQuery.devicePixelRatioOf(context);
     final pixelGridOrigin = outputPixelGrid?.logicalRect.topLeft ?? Offset.zero;
@@ -268,7 +281,7 @@ class DesktopWindowFrame extends ConsumerWidget {
       outputRect: outputRect,
     );
     final frame = desktopPixelAlignedWindowFrame(
-      frame: liveFrame,
+      frame: scrolledFrame,
       contentInset: placement.frameBorder,
       devicePixelRatio: devicePixelRatio,
       pixelGridOrigin: pixelGridOrigin,

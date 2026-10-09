@@ -31,8 +31,8 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
     _platform = ref.read(shellControllerProvider.notifier);
     _resetBuildFields();
     _automaticSoftwareKeyboard =
-        ref.watch(referenceShellProfileProvider) ==
-        ReferenceShellProfile.mobile;
+        ref.watch(referenceShellProfileProvider) !=
+        ReferenceShellProfile.desktop;
     _buildGeneration = beginBuildGeneration();
     final generation = _buildGeneration;
     ref.listen<ShellState>(shellControllerProvider, (_, next) {

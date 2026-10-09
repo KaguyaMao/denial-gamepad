@@ -4,12 +4,14 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 
 import 'package:denial_flutter_sdk/input.dart';
 import 'package:denial_flutter_sdk/models.dart';
 
 import '../state/desktop_window_switcher.dart';
 import '../state/desktop_visibility.dart';
+import '../state/reference_shell_metrics.dart';
 
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/settings.dart';
@@ -96,6 +98,17 @@ class _DesktopInputLayoutPublisherState
       final windowLayout = widget.gamepad
           ? DesktopWindowLayout.dwindle
           : settings.windowLayout;
+      // The touch profile publishes the software-keyboard rect so the
+      // compositor can shrink the focused tile and split the screen with it.
+      final keyboardRegions = widget.gamepad
+          ? ReferenceShellMetrics.softwareKeyboardRegions(
+              viewSize,
+              progress: shell.edgePanelVisible
+                  ? 1.0
+                  : shell.edgePanelDragProgress,
+              scrollStripVisible: shell.edgePanelVisible,
+            )
+          : const <Rect>[];
       ref
           .read(desktopWorkspaceProvider.notifier)
           .syncWorkspaceConfiguration(
@@ -136,6 +149,7 @@ class _DesktopInputLayoutPublisherState
         interactions: ref.read(shellInteractionRegistryProvider),
         displayLayout: displayLayout,
         windowLayout: windowLayout,
+        keyboardRegions: keyboardRegions,
       );
       if (_lastSource?.hasSameInputsAs(source) ?? false) {
         return;
@@ -412,6 +426,7 @@ class _DesktopInputLayoutPublisherState
       exclusiveShellMode: interactions.compositorExclusive,
       observeClientPointerPresses: interactions.observesClientPointerPresses,
       gamepadOverview: interactions.gamepadOverview,
+      softwareKeyboardRegions: source.keyboardRegions,
     );
     if (_lastSnapshot?.hasSameRoutingAs(snapshot) ?? false) {
       return true;
@@ -512,6 +527,7 @@ class _DesktopInputLayoutSource {
     required this.interactions,
     required this.displayLayout,
     required this.windowLayout,
+    this.keyboardRegions = const <Rect>[],
   });
 
   final Size viewSize;
@@ -527,6 +543,7 @@ class _DesktopInputLayoutSource {
   final ShellInteractionSnapshot interactions;
   final DisplayLayout? displayLayout;
   final DesktopWindowLayout windowLayout;
+  final List<Rect> keyboardRegions;
 
   bool hasSameInputsAs(_DesktopInputLayoutSource other) {
     return desktopVisible == other.desktopVisible &&
@@ -539,7 +556,8 @@ class _DesktopInputLayoutSource {
         identical(switcher, other.switcher) &&
         identical(interactions, other.interactions) &&
         identical(displayLayout, other.displayLayout) &&
-        windowLayout == other.windowLayout;
+        windowLayout == other.windowLayout &&
+        listEquals(keyboardRegions, other.keyboardRegions);
   }
 }
 

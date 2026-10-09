@@ -604,6 +604,11 @@ class DesktopWorkspaceState {
     return scroll == 0.0 ? frame : frame.shift(Offset(scroll, 0.0));
   }
 
+  /// The arranged overview frame without the strip scroll. The window frame
+  /// widget applies the live scroll itself, so a pan never rebuilds the scene.
+  Rect overviewFrame(DesktopWindowPlacement placement) =>
+      overview?.frames[placement.objectId] ?? placement.frame;
+
   DesktopWorkspaceState _replacePlacement(DesktopWindowPlacement placement) {
     // This map is created here and never exposed mutably. A read-only view
     // avoids copying it again through the public copyWith snapshot boundary.
@@ -690,7 +695,7 @@ bool desktopWorkspaceHasSameSceneStructure(
       left.workspaceCount != right.workspaceCount ||
       !mapEquals(left.activeWorkspaces, right.activeWorkspaces) ||
       !mapEquals(left.workspaceTransitions, right.workspaceTransitions) ||
-      !identical(left.overview, right.overview) ||
+      !_desktopOverviewHasSameSceneStructure(left.overview, right.overview) ||
       left.placements.length != right.placements.length) {
     return false;
   }
@@ -701,6 +706,35 @@ bool desktopWorkspaceHasSameSceneStructure(
     final other = right.placements[entry.key];
     if (other == null ||
         !_desktopPlacementHasSameSceneStructure(entry.value, other)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// A strip scroll only translates the overview; it never changes the scene's
+/// structure. Comparing overviews structurally (ignoring [scrollOffset]) keeps
+/// a touch pan from rebuilding the whole desktop scene on every sample.
+bool _desktopOverviewHasSameSceneStructure(
+  DesktopOverviewState? left,
+  DesktopOverviewState? right,
+) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left == null || right == null) {
+    return false;
+  }
+  if (left.monitorId != right.monitorId ||
+      left.bounds != right.bounds ||
+      left.backgroundBounds != right.backgroundBounds ||
+      left.selectedObjectId != right.selectedObjectId ||
+      !identical(left.workspaces, right.workspaces) ||
+      left.frames.length != right.frames.length) {
+    return false;
+  }
+  for (final entry in left.frames.entries) {
+    if (right.frames[entry.key] != entry.value) {
       return false;
     }
   }

@@ -675,6 +675,7 @@ impl WaylandFrontend {
         {
             return changed;
         }
+        let minimum_ratio = if self.gamepad_shell { 0.02 } else { 0.1 };
         self.resize_layout_window_with(window, |layout, window, work_area, gap| {
             layout.resize(LayoutResizeRequest {
                 window,
@@ -683,6 +684,10 @@ impl WaylandFrontend {
                 delta_x,
                 delta_y,
                 edges,
+                // The touch shell lets a pane be squeezed away entirely so the
+                // eviction path can background it; pointer desktops keep a
+                // usable minimum.
+                minimum_ratio,
             })
         })
     }
@@ -791,7 +796,10 @@ impl WaylandFrontend {
         };
         let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
         let extent = i64::from(work_area.size.w).max(i64::from(work_area.size.h));
-        let threshold = (extent / 20).max(24);
+        // A tile's minimum size is 64px, so the eviction threshold must sit
+        // comfortably above it; otherwise a pane pinned at its minimum would
+        // never be considered squeezed.
+        let threshold = (extent / 10).max(96);
         self.current_layout_placements()
             .into_iter()
             .filter(|placement| self.window_layout.space_for(&placement.window) == Some(space))

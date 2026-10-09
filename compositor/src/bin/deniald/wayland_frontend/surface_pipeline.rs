@@ -1966,9 +1966,20 @@ impl WaylandFrontend {
             self.invalidate_idle_inhibition();
         }
         self.input_visibility_known = true;
+        #[cfg(feature = "flutter")]
+        let keyboard_changed = self.gamepad_shell
+            && self.input_layout.as_ref().is_none_or(|previous| {
+                previous.software_keyboard_regions != layout.software_keyboard_regions
+            });
         let previous = self.input_layout.replace(layout);
         if routing_changed {
             self.client_input_route_cache = None;
+        }
+        #[cfg(feature = "flutter")]
+        if keyboard_changed {
+            // The touch keyboard insets the gamepad work area, so the focused
+            // tile must re-tile when it appears or disappears.
+            self.arrange_layout_windows();
         }
         if first_generation_layout {
             // InputLayout is published from the live widget tree, after the

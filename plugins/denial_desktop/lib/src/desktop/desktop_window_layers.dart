@@ -121,7 +121,7 @@ List<Widget> buildDesktopWindowLayers({
             stageBounds: switcherStageBounds,
             desktopWidgetFrame: desktopWidgetFrames[placement.objectId],
           )
-        : desktop.visualFrame(placement);
+        : desktop.overviewFrame(placement);
     if (arrangedFrame == null || arrangedFrame.isEmpty) {
       continue;
     }

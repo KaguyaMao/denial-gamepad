@@ -203,31 +203,39 @@ class _ProfileScene extends StatelessWidget {
     }
     // The gamepad profile reuses the desktop presentation scene; the touch
     // adaptations (exclusive/split policy, strip overview, dock) are layered in
-    // through the desktop publisher.
-    return DesktopInputLayoutPublisher(
-      gamepad: profile == ReferenceShellProfile.gamepad,
-      child: ShellSecureStage(
-        useConfiguredLockAnimation: true,
-        chrome: scene.chrome,
-        scene: Stack(
-          fit: StackFit.expand,
-          children: [
-            ShellPopupHost(
-              // Keep desktop feature popups inside the scene's paint plane.
-              // The screenshot selection layer remains above this overlay,
-              // so its frozen texture includes open menus while its controls
-              // paint and receive input above them.
-              child: ShellOverlayHost(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [scene.content, ...scene.overlays],
-                ),
+    // through the desktop publisher. It also mounts the software keyboard
+    // above the lock screen and desktop, and the compositor resizes the focused
+    // tile to leave it room.
+    final stage = ShellSecureStage(
+      useConfiguredLockAnimation: true,
+      chrome: scene.chrome,
+      scene: Stack(
+        fit: StackFit.expand,
+        children: [
+          ShellPopupHost(
+            // Keep desktop feature popups inside the scene's paint plane.
+            // The screenshot selection layer remains above this overlay,
+            // so its frozen texture includes open menus while its controls
+            // paint and receive input above them.
+            child: ShellOverlayHost(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [scene.content, ...scene.overlays],
               ),
             ),
-            const ScreenshotSelectionLayer(),
-          ],
-        ),
+          ),
+          const ScreenshotSelectionLayer(),
+        ],
       ),
+    );
+    return DesktopInputLayoutPublisher(
+      gamepad: profile == ReferenceShellProfile.gamepad,
+      child: profile == ReferenceShellProfile.gamepad
+          ? Stack(
+              fit: StackFit.expand,
+              children: [stage, const MobileSystemKeyboardLayer()],
+            )
+          : stage,
     );
   }
 }

@@ -178,6 +178,10 @@ pub(super) struct LayoutResizeRequest<WindowId> {
     pub(super) delta_x: f64,
     pub(super) delta_y: f64,
     pub(super) edges: LayoutResizeEdges,
+    /// Smallest share of the split the leading pane may shrink to. The touch
+    /// shell lowers this so a pane can be squeezed away entirely and evicted;
+    /// pointer desktops keep a usable minimum.
+    pub(super) minimum_ratio: f64,
 }
 
 /// A signed change to the focused tile's size, or its layout default.
@@ -865,6 +869,7 @@ where
         edges: LayoutResizeEdges,
         delta_x: f64,
         delta_y: f64,
+        minimum_ratio: f64,
     ) -> ResizedAxes {
         let Self::Split {
             axis,
@@ -884,9 +889,25 @@ where
         let axis = resolved_split_axis(*axis, geometry);
         let (first_geometry, second_geometry) = split_geometry_on_axis(geometry, gap, *ratio, axis);
         let mut resized = if window_in_first {
-            first.resize_window(window, first_geometry, gap, edges, delta_x, delta_y)
+            first.resize_window(
+                window,
+                first_geometry,
+                gap,
+                edges,
+                delta_x,
+                delta_y,
+                minimum_ratio,
+            )
         } else {
-            second.resize_window(window, second_geometry, gap, edges, delta_x, delta_y)
+            second.resize_window(
+                window,
+                second_geometry,
+                gap,
+                edges,
+                delta_x,
+                delta_y,
+                minimum_ratio,
+            )
         };
 
         let horizontal_split = axis == LayoutAxis::Horizontal;
@@ -909,7 +930,8 @@ where
         let available = extent.saturating_sub(gap.max(0)).max(2);
         let delta = if horizontal_split { delta_x } else { delta_y };
         if delta.is_finite() && delta != 0.0 {
-            let next = (*ratio + delta / f64::from(available)).clamp(0.1, 0.9);
+            let minimum = minimum_ratio.clamp(0.001, 0.25);
+            let next = (*ratio + delta / f64::from(available)).clamp(minimum, 1.0 - minimum);
             if (next - *ratio).abs() > f64::EPSILON {
                 *ratio = next;
                 resized.changed = true;
@@ -1196,6 +1218,7 @@ where
             request.edges,
             request.delta_x,
             request.delta_y,
+            request.minimum_ratio,
         )
         .changed
     }
@@ -1873,6 +1896,7 @@ where
             request.edges,
             request.delta_x,
             request.delta_y,
+            request.minimum_ratio,
         );
         let (main_extent, main_delta, main_leading, main_trailing) = match self.axis {
             LayoutAxis::Horizontal => (
@@ -2585,7 +2609,9 @@ fn split_geometry_on_axis_with_minimums(
     let gap = requested_gap.clamp(0, extent.saturating_sub(2));
     let available = extent.saturating_sub(gap);
     let ratio = if requested_ratio.is_finite() {
-        requested_ratio.clamp(0.1, 0.9)
+        // A pane may be squeezed to (almost) nothing so the touch shell can
+        // evict it; the per-pane minimums below are the real floor.
+        requested_ratio.clamp(0.0, 1.0)
     } else {
         0.5
     };
@@ -3638,7 +3664,6 @@ mod tests {
                 anchor: (window > 1).then_some(window - 1),
             });
         }
-
         assert!(layout.resize(LayoutResizeRequest {
             window: 2,
             work_area: rect(0, 0, 1000, 600),
@@ -3649,6 +3674,8 @@ mod tests {
                 bottom: true,
                 ..LayoutResizeEdges::default()
             },
+
+            minimum_ratio: 0.1,
         }));
         assert_eq!(
             layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 0),
@@ -3666,6 +3693,59 @@ mod tests {
                     geometry: rect(500, 360, 500, 240),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn dwindle_minimum_ratio_lets_a_pane_be_squeezed_away_for_eviction() {
+        let mut layout = DwindleLayout::<u64>::default();
+        for window in 1..=2 {
+            layout.insert(LayoutInsertion {
+                window,
+                space: OUTPUT,
+                anchor: (window > 1).then_some(window - 1),
+            });
+        }
+        // A desktop-sized minimum pins the leading pane at 10% of the work
+        // area even under an extreme drag.
+        assert!(layout.resize(LayoutResizeRequest {
+            window: 1,
+            work_area: rect(0, 0, 1000, 600),
+            gap: 0,
+            delta_x: -5000.0,
+            delta_y: 0.0,
+            edges: LayoutResizeEdges {
+                right: true,
+                ..LayoutResizeEdges::default()
+            },
+            minimum_ratio: 0.1,
+        }));
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 0)[0]
+                .geometry
+                .size
+                .w,
+            100
+        );
+
+        // The touch shell lowers the minimum so the same drag collapses the
+        // pane to the layout's 1px floor, below any eviction threshold.
+        assert!(layout.resize(LayoutResizeRequest {
+            window: 1,
+            work_area: rect(0, 0, 1000, 600),
+            gap: 0,
+            delta_x: -5000.0,
+            delta_y: 0.0,
+            edges: LayoutResizeEdges {
+                right: true,
+                ..LayoutResizeEdges::default()
+            },
+            minimum_ratio: 0.02,
+        }));
+        let got = layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 0);
+        assert!(
+            got[0].geometry.size.w <= 24,
+            "expected the leading pane to collapse, got {got:?}"
         );
     }
 
@@ -4089,6 +4169,8 @@ mod tests {
                 right: true,
                 ..LayoutResizeEdges::default()
             },
+
+            minimum_ratio: 0.1,
         }));
         assert_eq!(
             layout.rows[&OUTPUT].columns[0].width_fraction,
@@ -4126,6 +4208,8 @@ mod tests {
                 bottom: true,
                 ..LayoutResizeEdges::default()
             },
+
+            minimum_ratio: 0.1,
         }));
         let placements = layout.arrange(OUTPUT, work_area, 10);
         assert_eq!(placements[0].window, 2);
@@ -4427,6 +4511,8 @@ mod tests {
                             bottom: axis == LayoutAxis::Vertical,
                             ..LayoutResizeEdges::default()
                         },
+
+                        minimum_ratio: 0.1,
                     }));
                     let before = layout.arrange(OUTPUT, work_area, 10);
                     assert_ne!(before[0].geometry.size, before[1].geometry.size);
@@ -4477,6 +4563,8 @@ mod tests {
                 right: true,
                 ..LayoutResizeEdges::default()
             },
+
+            minimum_ratio: 0.1,
         }));
         for (first, second) in [(1, 3), (1, 2)] {
             let mut preserve = layout.snapshot();
@@ -4541,6 +4629,8 @@ mod tests {
                     right: true,
                     ..LayoutResizeEdges::default()
                 },
+
+                minimum_ratio: 0.1,
             }));
             prepare_scrolling(&mut layout, work_area, 10, LayoutAxis::Horizontal);
         }
@@ -4619,6 +4709,8 @@ mod tests {
                 right: true,
                 ..LayoutResizeEdges::default()
             },
+
+            minimum_ratio: 0.1,
         }));
         prepare_scrolling(&mut layout, work_area, 10, LayoutAxis::Horizontal);
         assert_eq!(
@@ -4706,6 +4798,8 @@ mod tests {
                                     top: axis == LayoutAxis::Vertical && leading,
                                     bottom: axis == LayoutAxis::Vertical && !leading,
                                 },
+
+                                minimum_ratio: 0.1,
                             });
                             for _ in 0..3 {
                                 prepare_scrolling(&mut layout, work_area, 10, axis);
@@ -4788,6 +4882,8 @@ mod tests {
                         top: axis == LayoutAxis::Vertical && leading,
                         bottom: axis == LayoutAxis::Vertical && !leading,
                     },
+
+                    minimum_ratio: 0.1,
                 }));
                 prepare_scrolling(&mut layout, work_area, 10, axis);
                 let after = geometry(&layout);
@@ -4819,6 +4915,8 @@ mod tests {
                 left: true,
                 ..LayoutResizeEdges::default()
             },
+
+            minimum_ratio: 0.1,
         }));
         assert_eq!(
             horizontal.arrange(OUTPUT, horizontal_area, 10)[0]
@@ -4845,6 +4943,8 @@ mod tests {
                 top: true,
                 ..LayoutResizeEdges::default()
             },
+
+            minimum_ratio: 0.1,
         }));
         assert_eq!(
             vertical.arrange(OUTPUT, vertical_area, 10)[0].geometry.size,

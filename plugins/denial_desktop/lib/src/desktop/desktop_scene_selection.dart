@@ -59,7 +59,12 @@ class DesktopSceneWorkspace {
   int get hashCode => Object.hash(
     state.nextZ,
     state.viewSize,
-    identityHashCode(state.overview),
+    // A strip scroll changes the overview's identity but not the scene
+    // structure, so the hash must ignore it too; otherwise equal selections
+    // would hash differently.
+    state.overview?.monitorId,
+    state.overview?.selectedObjectId,
+    state.overview?.frames.length,
     state.placements.length,
   );
 }
