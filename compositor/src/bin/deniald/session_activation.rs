@@ -5,6 +5,16 @@ use super::*;
 const DENIAL_SESSION_TARGET: &str = "denial-session.target";
 const GRAPHICAL_SESSION_TARGET: &str = "graphical-session.target";
 const SYSTEMD_DBUS_NAME: &str = "org.freedesktop.systemd1";
+/// The ScreenCast backend behind `org.freedesktop.impl.portal.ScreenCast`.
+///
+/// It must be started explicitly rather than pulled in with `Wants=` on
+/// `denial-session.target`: `Wants=` adds an implicit `After=` that closes a
+/// loop (`denial-session.target` -> `graphical-session.target` -> this unit's
+/// own `After=graphical-session.target`), and systemd deletes the unit's start
+/// job to break it. Without this backend the ScreenCast portal reports
+/// `AvailableSourceTypes == 0`, so OBS never registers its screen-capture
+/// source. This name is only a hint: an absent unit is not an error.
+const SCREENCAST_PORTAL_UNIT: &str = "xdg-desktop-portal-wlr.service";
 /// Upper bound on waiting for the session targets to reach `inactive` after a
 /// requested stop. The display manager is waiting on this process to exit, so a
 /// stalled job must not hold the VT hostage indefinitely.
@@ -168,6 +178,26 @@ fn start_systemd_graphical_session(
     change_systemd_graphical_session(connection, "StartUnit", DENIAL_SESSION_TARGET)
 }
 
+/// Starts the ScreenCast portal backend without creating a unit dependency.
+///
+/// A job started directly over D-Bus carries no ordering edge from
+/// `denial-session.target`, so it cannot reintroduce the cycle that made
+/// systemd drop the unit's start job. `xdg-desktop-portal-wlr.service` keeps
+/// its own `After=graphical-session.target`; the graphical target is pulled in
+/// by `denial-session.target` in the same activation.
+fn start_screencast_portal_backend(connection: &zbus::blocking::Connection) {
+    match change_systemd_graphical_session(connection, "StartUnit", SCREENCAST_PORTAL_UNIT) {
+        Ok(job) => debug!(unit = SCREENCAST_PORTAL_UNIT, job = %job, "queued the ScreenCast portal backend"),
+        // Best-effort: a distribution may route ScreenCast to a different
+        // backend, or ship no wlroots backend at all.
+        Err(error) => debug!(
+            %error,
+            unit = SCREENCAST_PORTAL_UNIT,
+            "could not start the ScreenCast portal backend"
+        ),
+    }
+}
+
 /// Withdraws the session-description variables Denial published at startup.
 fn clear_systemd_session_environment(connection: &zbus::blocking::Connection) {
     let Ok(proxy) = zbus::blocking::Proxy::new(
@@ -303,6 +333,11 @@ pub(super) fn publish_session_activation_environment(
         job = %job,
         "published the compositor session and queued its graphical-session target"
     );
+    // ScreenCast must be discoverable when an application asks for it, so the
+    // backend is queued at the same readiness point instead of being activated
+    // lazily. See `start_screencast_portal_backend` for why this is an explicit
+    // job rather than a `Wants=` dependency.
+    start_screencast_portal_backend(&connection);
     Ok(SessionActivation::Systemd)
 }
 

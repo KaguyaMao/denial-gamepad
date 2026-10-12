@@ -57,9 +57,18 @@ itself.
 
 At its first ready frame, Denial activates the packaged
 `denial-session.target`, which binds the standard systemd
-`graphical-session.target` and starts `xdg-desktop-portal-wlr.service`. Portal
-activation is deliberately gated on that ready point so the backend inherits
-the live Wayland socket and OBS can see the ScreenCast source types immediately.
+`graphical-session.target`, and requests an explicit start job for
+`xdg-desktop-portal-wlr.service`. Portal activation is deliberately gated on
+that ready point so the backend inherits the live Wayland socket and OBS can see
+the ScreenCast source types immediately.
+
+The backend must be started with an explicit job rather than declared with
+`Wants=` on the session target. `Wants=` implies `After=`, and because
+`xdg-desktop-portal-wlr.service` itself orders after `graphical-session.target`
+while `denial-session.target` orders before it, systemd reports an ordering
+cycle and deletes the unit's start job. The ScreenCast portal then reports
+`AvailableSourceTypes == 0`, and OBS logs `[pipewire] No capture sources
+available` and never registers its screen-capture source.
 
 Because the default `xdg-desktop-portal-wlr` chooser starts `slurp`, Denial
 provides a Zenity chooser instead. Zenity uses a regular xdg-shell window and

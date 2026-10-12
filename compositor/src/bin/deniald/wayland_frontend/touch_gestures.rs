@@ -217,8 +217,6 @@ impl Gesture {
             }),
             Self::EdgeResize {
                 window_id,
-                last,
-                origin,
                 edges,
                 started: true,
                 ..

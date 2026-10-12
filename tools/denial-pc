@@ -1680,6 +1680,18 @@ install_session() {
     if ! command -v zenity >/dev/null 2>&1; then
         printf 'warning  zenity is not installed; the OBS source selector will not open\n' >&2
     fi
+    if [[ -e "$SESSION_TARGET_FILE" ]] \
+        && command -v systemd-analyze >/dev/null 2>&1; then
+        # ScreenCast is served by a portal backend that deniald starts directly,
+        # not by a unit dependency. A `Wants=` on it closes an ordering loop
+        # through graphical-session.target and systemd silently drops the job,
+        # which leaves OBS with no screen-capture source. Surface that here
+        # instead of at capture time.
+        if ! systemd-analyze --user verify "$SESSION_TARGET_FILE" >/dev/null 2>&1; then
+            printf 'warning  %s does not verify; ScreenCast may not start\n' \
+                "$SESSION_TARGET_FILE" >&2
+        fi
+    fi
 
     local rendered portal_rendered wlr_portal_rendered dbus_rendered unit_rendered polkit_rendered
     rendered="$(mktemp)"

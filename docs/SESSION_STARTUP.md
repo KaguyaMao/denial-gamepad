@@ -19,10 +19,14 @@ every initial output has accepted a real atomic commit, Denial also publishes
 the environment to an available systemd user manager and starts its packaged
 `denial-session.target`. That target binds to the standard
 `graphical-session.target`, allowing portals and other desktop services to
-start against the discovered sockets. It also starts
-`xdg-desktop-portal-wlr.service` after the graphical target is active, so the
-ScreenCast backend is already discoverable when applications such as OBS query
-its available source types. It pulls in and waits for
+start against the discovered sockets. At that same point deniald also starts
+`xdg-desktop-portal-wlr.service` with an explicit systemd job, so the ScreenCast
+backend is already discoverable when applications such as OBS query its
+available source types. The job is requested directly rather than through a
+`Wants=` dependency: `Wants=` adds an implicit `After=`, and this unit's own
+`After=graphical-session.target` would then close an ordering loop through
+`denial-session.target` that makes systemd delete the unit's start job. It pulls
+in and waits for
 `graphical-session-pre.target` before the graphical session starts, then
 starts systemd's
 `xdg-desktop-autostart.target`, so the user manager launches the effective
