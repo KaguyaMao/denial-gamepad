@@ -41,9 +41,12 @@ workspace controller, so a separate package would be a cycle, not a plugin.
 Dwindle admission, edge-resize eviction, transient stacking and input capture
 stay in `deniald`.
 
-v0.5.1 adds rotation lock and a touch-routing pass that this branch does not
-contain. Those three commits also rewrite `touch_gestures.rs`, which this
-branch has already diverged. Follow that as a merge, not a second copy.
+Gamepad lives on `main`. v0.5.1's rotation lock and shared touch routing are
+part of the same tree, so the profile layers its policy on that routing instead
+of carrying a second copy of `touch_gestures.rs`: three- and four-finger
+navigation, the minimize swipe and the desktop swipe come from the shared
+recognizer, while the gamepad border resize, the bottom-strip home gesture and
+the exclusive/split admission stay profile-specific.
 
 ## Layout model
 
