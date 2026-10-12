@@ -631,42 +631,64 @@ class _QuickSettingsTilesSection extends ConsumerWidget {
         ),
         if (rotationLock.supported) ...[
           const SizedBox(height: QuickSettingsGridMetrics.gutter),
-          SizedBox(
-            height: QuickSettingsGridMetrics.capsule,
-            child: QuickTile(
-              icon: rotationLock.locked
-                  ? Icons.screen_lock_rotation_rounded
-                  : Icons.screen_rotation_rounded,
-              title: l10n.quickSettingsRotation,
-              subtitle: rotationLock.error != null
-                  ? l10n.commonError
-                  : (rotationLock.locked
-                        ? l10n.quickSettingsLocked
-                        : l10n.quickSettingsAutomatic),
-              active: rotationLock.locked,
-              enabled: !rotationLock.busy,
-              busy: rotationLock.busy,
-              wide: true,
-              onTap: () => ref.read(rotationLockProvider.notifier).toggle(),
+          ColorOsShadeElementReveal(
+            progress: progress,
+            threshold: ColorOsShadeMotion.contentElementThreshold,
+            delay: ColorOsShadeMotion.nodeStagger * 7,
+            fade: false,
+            collapseTranslation:
+                QuickSettingsGridMetrics.height +
+                QuickSettingsGridMetrics.gutter +
+                QuickSettingsGridMetrics.capsule +
+                28,
+            child: SizedBox(
+              height: QuickSettingsGridMetrics.capsule,
+              child: QuickTile(
+                icon: rotationLock.locked
+                    ? Icons.screen_lock_rotation_rounded
+                    : Icons.screen_rotation_rounded,
+                title: l10n.quickSettingsRotation,
+                subtitle: rotationLock.error != null
+                    ? l10n.commonError
+                    : (rotationLock.locked
+                          ? l10n.quickSettingsLocked
+                          : l10n.quickSettingsAutomatic),
+                active: rotationLock.locked,
+                enabled: !rotationLock.busy,
+                busy: rotationLock.busy,
+                wide: true,
+                onTap: () => ref.read(rotationLockProvider.notifier).toggle(),
+              ),
             ),
           ),
         ],
         if (singleOutput) ...[
           const SizedBox(height: QuickSettingsGridMetrics.gutter),
-          SizedBox(
-            height: QuickSettingsGridMetrics.capsule,
-            child: QuickTile(
-              icon: Icons.desktop_windows_rounded,
-              title: l10n.shellPresentationDesktop,
-              subtitle: presentation == ReferenceShellProfile.desktop
-                  ? l10n.commonOn
-                  : l10n.commonOff,
-              active: presentation == ReferenceShellProfile.desktop,
-              wide: true,
-              onTap: () {
-                ref.read(referenceShellProvider.notifier).closeQuickSettings();
-                ref.read(referenceShellPresentationProvider.notifier).toggle();
-              },
+          ColorOsShadeElementReveal(
+            progress: progress,
+            threshold: ColorOsShadeMotion.contentElementThreshold,
+            delay: ColorOsShadeMotion.nodeStagger * 8,
+            fade: false,
+            collapseTranslation:
+                QuickSettingsGridMetrics.height +
+                QuickSettingsGridMetrics.gutter * 2 +
+                QuickSettingsGridMetrics.capsule * 2 +
+                28,
+            child: SizedBox(
+              height: QuickSettingsGridMetrics.capsule,
+              child: QuickTile(
+                icon: Icons.desktop_windows_rounded,
+                title: l10n.shellPresentationDesktop,
+                subtitle: presentation == ReferenceShellProfile.desktop
+                    ? l10n.commonOn
+                    : l10n.commonOff,
+                active: presentation == ReferenceShellProfile.desktop,
+                wide: true,
+                onTap: () {
+                  ref.read(referenceShellProvider.notifier).closeQuickSettings();
+                  ref.read(referenceShellPresentationProvider.notifier).toggle();
+                },
+              ),
             ),
           ),
         ],
