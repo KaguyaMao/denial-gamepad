@@ -1062,7 +1062,7 @@ class SettingsColorButton extends StatelessWidget {
     child: TextButton(
       onPressed: onPressed,
       style: TextButton.styleFrom(
-        minimumSize: const Size(44, 44),
+        minimumSize: const Size(48, 48),
         padding: const EdgeInsets.fromLTRB(8, 6, 12, 6),
         foregroundColor: context.applicationColors.foreground,
         backgroundColor: context.applicationColors.control,
@@ -1174,7 +1174,7 @@ class _SettingsChoiceChip extends StatelessWidget {
       child: TextButton(
         onPressed: onPressed,
         style: TextButton.styleFrom(
-          minimumSize: const Size(44, 44),
+          minimumSize: const Size(48, 48),
           padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
           foregroundColor: selected
               ? accent
@@ -1219,7 +1219,7 @@ class _AnchorButton extends StatelessWidget {
           onPressed: onPressed,
           style: TextButton.styleFrom(
             padding: EdgeInsets.zero,
-            minimumSize: const Size(44, 44),
+            minimumSize: const Size(48, 48),
             backgroundColor: selected
                 ? accent.withAlpha(32)
                 : context.applicationColors.control,

@@ -108,6 +108,14 @@ SESSION_SELECT_FILE="${DENIAL_SESSION_SELECT_FILE:-${HOME:?HOME is required}/.lo
 GAMEPAD_DESKTOP_SOURCE="$ROOT/dev/denial-gamepad-mode.desktop.in"
 GAMEPAD_DESKTOP_FILE="${DENIAL_GAMEPAD_DESKTOP_FILE:-$USER_DATA_HOME/applications/denial-gamepad-mode.desktop}"
 GAMEPAD_SESSION_ID="${DENIAL_GAMEPAD_SESSION_ID:-denial-gamepad-test.desktop}"
+MOBILE_APP_DESKTOP_SOURCE="$ROOT/dev/denial-mobile-mode.desktop.in"
+MOBILE_APP_DESKTOP_FILE="${DENIAL_MOBILE_APP_DESKTOP_FILE:-$USER_DATA_HOME/applications/denial-mobile-mode.desktop}"
+MOBILE_SESSION_SELECT_FILE="${DENIAL_MOBILE_SESSION_SELECT_FILE:-${HOME:?HOME is required}/.local/bin/denial-mobile-session-select}"
+MOBILE_SESSION_ID="${DENIAL_MOBILE_SESSION_ID:-denial-mobile.desktop}"
+MOBILE_SESSION_TEMPLATE="$ROOT/dev/denial-mobile.desktop.in"
+MOBILE_SESSION_FILE="${DENIAL_MOBILE_SESSION_FILE:-/usr/share/wayland-sessions/denial-mobile.desktop}"
+MOBILE_SESSION_SCRIPT="$ROOT/dev/denial-mobile-session"
+MOBILE_OUTPUT_CONFIG="$ROOT/dev/denial-mobile-outputs.conf"
 TABLET_MODE_MASK_FILE="$USER_DATA_HOME/applications/denial-tablet-mode.desktop"
 ENGINE="${DENIAL_PC_ENGINE:-$BUNDLE/lib/libflutter_engine.so}"
 ICU_DATA="$FLUTTER_SDK_ROOT/bin/cache/artifacts/engine/$DENIAL_FLUTTER_PLATFORM/icudtl.dat"
@@ -228,6 +236,12 @@ Commands:
                     Refresh the local Settings entry for this user
   install-gamepad-entry
                     Install the single Plasma gamepad mode launcher entry
+  install-mobile-session
+                    Add a separate Denial Mobile SDDM entry; leaves existing entries untouched
+  install-mobile-entry
+                    Add a separate KDE application-launcher entry for Denial Mobile
+  remove-mobile-session
+                    Remove only the Denial Mobile entry installed by this checkout
   install-engine-test-session
                     Add a separate display-manager entry for the staged engine test
   remove-session    Remove that session and portal configuration
@@ -239,6 +253,18 @@ Environment:
                      Prepared Flutter source tree override
   DENIAL_FLUTTER_SDK_ROOT
                      Compatibility alias for DENIAL_FLUTTER_SOURCE_ROOT
+  DENIAL_MOBILE_SESSION_FILE
+                     Override the new mobile SDDM entry path
+  DENIAL_MOBILE_APP_DESKTOP_FILE
+                     Override the new KDE application-launcher entry path
+  DENIAL_MOBILE_SESSION_SELECT_FILE
+                     Override the dedicated mobile session-selector path
+  DENIAL_MOBILE_SESSION_ID
+                     Override the mobile display-manager session ID
+  DENIAL_MOBILE_OUTPUT_CONFIG
+                     Override the mobile session's isolated output configuration
+  DENIAL_MOBILE_DRM_DEVICE
+                     Override the mobile session DRM card path
   DENIAL_BUILD_JOBS  Explicit Cargo and Flutter build parallelism
   DENIAL_PC_DEDICATED_BUILDER
                      Set to 1 to use every CPU by default
@@ -1506,6 +1532,17 @@ show_session_state() {
         printf 'stale    %-18s %s (run install-session)\n' "session entry" "$SESSION_FILE"
     fi
 
+    if [[ ! -e "$MOBILE_SESSION_FILE" ]]; then
+        printf 'missing  %-18s %s (optional; run install-mobile-session)\n' \
+            "mobile session" "$MOBILE_SESSION_FILE"
+    elif grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$MOBILE_SESSION_FILE" \
+        && grep -Fqx 'X-Denial-Mobile-Profile=mobile' "$MOBILE_SESSION_FILE"; then
+        printf 'ok       %-18s %s\n' "mobile session" "$MOBILE_SESSION_FILE"
+    else
+        printf 'stale    %-18s %s (refusing to replace an unmanaged entry)\n' \
+            "mobile session" "$MOBILE_SESSION_FILE"
+    fi
+
     if [[ ! -e "$SETTINGS_DESKTOP_FILE" ]]; then
         printf 'missing  %-18s %s\n' \
             "Settings desktop" "$SETTINGS_DESKTOP_FILE"
@@ -1709,6 +1746,98 @@ install_engine_test_session() {
     printf 'Log out, then choose "Denial (engine test)" in the display manager.\n'
 }
 
+install_mobile_session() {
+    require_file "$MOBILE_SESSION_TEMPLATE"
+    require_file "$MOBILE_SESSION_SCRIPT"
+    require_file "$MOBILE_OUTPUT_CONFIG"
+    [[ -x "$MOBILE_SESSION_SCRIPT" ]] \
+        || die "mobile session launcher is not executable: $MOBILE_SESSION_SCRIPT"
+    if [[ -e "$MOBILE_SESSION_FILE" || -L "$MOBILE_SESSION_FILE" ]] \
+        && { ! grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$MOBILE_SESSION_FILE" \
+            || ! grep -Fqx 'X-Denial-Mobile-Profile=mobile' "$MOBILE_SESSION_FILE"; }; then
+        die "refusing to replace unmanaged session entry: $MOBILE_SESSION_FILE"
+    fi
+
+    local rendered
+    rendered="$(mktemp)"
+    {
+        printf '# Installed by %s/denial-pc\n' "$SCRIPT_DIR"
+        sed \
+            -e "s|@LAUNCHER@|$MOBILE_SESSION_SCRIPT|g" \
+            "$MOBILE_SESSION_TEMPLATE"
+    } >"$rendered"
+    if as_root install -Dm644 -- "$rendered" "$MOBILE_SESSION_FILE"; then
+        :
+    else
+        local status=$?
+        rm -f -- "$rendered"
+        return "$status"
+    fi
+    rm -f -- "$rendered"
+    printf 'Installed the separate Denial Mobile session: %s\n' "$MOBILE_SESSION_FILE"
+    printf 'The existing Denial and gamepad session entries were not changed.\n'
+    printf 'Log out, then select “Denial Mobile” in SDDM.\n'
+}
+
+remove_mobile_session() {
+    [[ -e "$MOBILE_SESSION_FILE" || -L "$MOBILE_SESSION_FILE" ]] \
+        || { printf 'Already absent: %s\n' "$MOBILE_SESSION_FILE"; return 0; }
+    if ! grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$MOBILE_SESSION_FILE" \
+        || ! grep -Fqx 'X-Denial-Mobile-Profile=mobile' "$MOBILE_SESSION_FILE"; then
+        die "refusing to remove an unmanaged mobile session entry: $MOBILE_SESSION_FILE"
+    fi
+    as_root rm -f -- "$MOBILE_SESSION_FILE"
+    printf 'Removed %s\n' "$MOBILE_SESSION_FILE"
+}
+
+install_mobile_entry() {
+    require_file "$SESSION_SELECT_SOURCE"
+    require_file "$MOBILE_APP_DESKTOP_SOURCE"
+    [[ "$MOBILE_SESSION_ID" =~ ^[A-Za-z0-9._-]+\.desktop$ ]] \
+        || die "invalid mobile session id: $MOBILE_SESSION_ID"
+    local target_session="/usr/share/wayland-sessions/$MOBILE_SESSION_ID"
+    [[ -f "$target_session" ]] \
+        || die "mobile session target is missing; run install-mobile-session first: $target_session"
+    grep -Fqx 'X-Denial-Mobile-Profile=mobile' "$target_session" \
+        || die "session target is not marked as the Denial Mobile profile: $target_session"
+
+    if [[ -e "$MOBILE_APP_DESKTOP_FILE" || -L "$MOBILE_APP_DESKTOP_FILE" ]] \
+        && { ! grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$MOBILE_APP_DESKTOP_FILE" \
+            || ! grep -Fqx 'Name=进入 Denial 移动桌面' "$MOBILE_APP_DESKTOP_FILE"; }; then
+        die "refusing to replace unmanaged mobile launcher entry: $MOBILE_APP_DESKTOP_FILE"
+    fi
+    if [[ -e "$MOBILE_SESSION_SELECT_FILE" || -L "$MOBILE_SESSION_SELECT_FILE" ]] \
+        && ! grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$MOBILE_SESSION_SELECT_FILE"; then
+        die "refusing to replace unmanaged mobile session selector: $MOBILE_SESSION_SELECT_FILE"
+    fi
+
+    local rendered_selector rendered_desktop
+    rendered_selector="$(mktemp)"
+    rendered_desktop="$(mktemp)"
+    sed "1a # Installed by $SCRIPT_DIR/denial-pc" \
+        "$SESSION_SELECT_SOURCE" >"$rendered_selector"
+    {
+        printf '# Installed by %s/denial-pc\n' "$SCRIPT_DIR"
+        sed \
+            -e "s|@MOBILE_SESSION_SELECT@|$MOBILE_SESSION_SELECT_FILE|g" \
+            -e "s|@MOBILE_SESSION_ID@|$MOBILE_SESSION_ID|g" \
+            "$MOBILE_APP_DESKTOP_SOURCE"
+    } >"$rendered_desktop"
+
+    if install -Dm755 -- "$rendered_selector" "$MOBILE_SESSION_SELECT_FILE" \
+        && install -Dm644 -- "$rendered_desktop" "$MOBILE_APP_DESKTOP_FILE"; then
+        rm -f -- "$rendered_selector" "$rendered_desktop"
+    else
+        local status=$?
+        rm -f -- "$rendered_selector" "$rendered_desktop"
+        return "$status"
+    fi
+    printf 'Installed the independent KDE Mobile launcher: %s\n' \
+        "$MOBILE_APP_DESKTOP_FILE"
+    printf 'It selects %s; the existing Gamepad launcher and selector were not changed.\n' \
+        "$MOBILE_SESSION_ID"
+}
+
 remove_engine_test_session() {
     if [[ ! -e "$ENGINE_TEST_SESSION_FILE" ]]; then
         printf 'Already absent: %s\n' "$ENGINE_TEST_SESSION_FILE"
@@ -1869,6 +1998,9 @@ case "${1:-}" in
     install-session) install_session ;;
     install-settings-entry) install_settings_desktop_entry ;;
     install-gamepad-entry) install_gamepad_entry ;;
+    install-mobile-session) install_mobile_session ;;
+    install-mobile-entry) install_mobile_entry ;;
+    remove-mobile-session) remove_mobile_session ;;
     install-welcome-entry) install_welcome_desktop_entries ;;
     install-plugin-manager-entry) install_plugin_manager_desktop_entry ;;
     install-engine-test-session) install_engine_test_session ;;

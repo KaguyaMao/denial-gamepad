@@ -23,6 +23,7 @@ const SESSION_ENVIRONMENT_KEYS: [&str; 7] = [
     "XDG_SESSION_DESKTOP",
     "XDG_SESSION_TYPE",
 ];
+const PORTAL_DESKTOP_NAMES: &str = "Denial:wlroots";
 
 pub(super) fn preserves_predecessor_kms_state(
     runtime_limit: RuntimeLimit,
@@ -49,7 +50,11 @@ fn session_activation_environment(
         ("DESKTOP_SESSION", String::from("Denial")),
         ("QT_QPA_PLATFORMTHEME", qt_platform_theme.to_owned()),
         ("WAYLAND_DISPLAY", wayland_display.to_owned()),
-        ("XDG_CURRENT_DESKTOP", String::from("Denial")),
+        // xdg-desktop-portal-wlr still consults its portal metadata UseIn list
+        // on supported releases. Keep Denial first for our portals.conf and
+        // add the documented wlroots alias so the ScreenCast backend is
+        // eligible. Launched applications still get XDG_CURRENT_DESKTOP=Denial.
+        ("XDG_CURRENT_DESKTOP", PORTAL_DESKTOP_NAMES.to_owned()),
         ("XDG_SESSION_DESKTOP", String::from("Denial")),
         ("XDG_SESSION_TYPE", String::from("wayland")),
     ]);
@@ -325,6 +330,12 @@ mod tests {
         assert_eq!(
             without_xwayland.get("WAYLAND_DISPLAY").map(String::as_str),
             Some("wayland-7")
+        );
+        assert_eq!(
+            without_xwayland
+                .get("XDG_CURRENT_DESKTOP")
+                .map(String::as_str),
+            Some(PORTAL_DESKTOP_NAMES)
         );
     }
 

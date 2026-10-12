@@ -361,6 +361,8 @@ impl WaylandFrontend {
             window_registry: WindowRegistry::default(),
             window_layout: create_window_layout(window_layout_kind),
             #[cfg(feature = "flutter")]
+            gamepad_resize_layout_snapshot: None,
+            #[cfg(feature = "flutter")]
             workspace_drop_preview: None,
             #[cfg(feature = "flutter")]
             input_layout: None,

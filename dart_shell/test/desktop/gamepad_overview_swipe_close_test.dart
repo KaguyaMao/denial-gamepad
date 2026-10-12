@@ -36,7 +36,7 @@ void main() {
                   overview: true,
                   desktopWidget: false,
                   dragging: false,
-                  swipeUpCloses: true,
+                  swipeUpTerminates: true,
                   label: 'scrolled card',
                   onTap: () {},
                   onClose: () => closed++,
@@ -111,7 +111,7 @@ void main() {
     }
   });
 
-  testWidgets('an upward swipe on a gamepad overview card closes it', (
+  testWidgets('an upward swipe on a gamepad overview card closes its app', (
     tester,
   ) async {
     var closed = 0;
@@ -128,7 +128,7 @@ void main() {
               overview: true,
               desktopWidget: false,
               dragging: false,
-              swipeUpCloses: true,
+              swipeUpTerminates: true,
               label: 'card',
               onTap: () {},
               onClose: () => closed += 1,
@@ -153,7 +153,7 @@ void main() {
     await gesture.up();
     await tester.pump();
 
-    expect(closed, 1, reason: 'upward travel exceeded the close distance');
+    expect(closed, 1, reason: 'upward travel exceeded the termination distance');
     expect(scrolled, 0.0, reason: 'a purely vertical swipe does not scroll');
   });
 
@@ -174,7 +174,7 @@ void main() {
               overview: true,
               desktopWidget: false,
               dragging: false,
-              swipeUpCloses: true,
+              swipeUpTerminates: true,
               label: 'card',
               onTap: () {},
               onClose: () => closed += 1,

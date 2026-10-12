@@ -64,7 +64,7 @@ class AppLauncher {
     final expected = expectedWindowAppIds(app).map(_normalizeIdentity).toSet();
     final name = _normalizeIdentity(app.name);
     for (final window in windows) {
-      if (!window.isUserApp) {
+      if (!window.isPresentedUserApp) {
         continue;
       }
       // Xwayland and Flatpak clients sometimes expose the launcher's title as

@@ -475,7 +475,9 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
       return cached.topology;
     }
     final windowsById = <int, DenialWindow>{
-      for (final window in windows) window.objectId: window,
+      for (final window in windows)
+        if (!window.isUserApp || window.isPresentedUserApp)
+          window.objectId: window,
     };
     final popupSurfaces = windows
         .where((window) => window.isPopupSurface)
@@ -534,7 +536,9 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
             if (!placement.minimized &&
                 !departing.containsKey(entry.key) &&
                 !previous.isPlacementPresented(placement))
-              entry.key: opened.cameraRect(entry.value, camera),
+              entry.key: opened
+                  .cameraRect(entry.value, camera)
+                  .shift(Offset(after.scrollOffset * -1.0, 0.0)),
       };
       if (entries.isEmpty) {
         return;
@@ -653,7 +657,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
       }
     }
     for (final window in oldWidget.windows.where(
-      (window) => window.isUserApp,
+      (window) => window.isPresentedUserApp,
     )) {
       if (activeObjectIds.contains(window.objectId)) {
         continue;
@@ -664,7 +668,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
       // the desktop close animation.
       final inOverview = oldWidget.desktop.isInOverview(window.objectId);
       if (widget.closeEffect == DesktopWindowCloseEffect.none ||
-          !window.isUserApp ||
+          !window.isPresentedUserApp ||
           window.suppressAnimations ||
           placement == null ||
           (placement.minimized && !inOverview)) {
@@ -770,6 +774,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
     final gamepad =
         ref.watch(referenceShellProfileProvider) ==
         ReferenceShellProfile.gamepad;
+    final gamepadStripOverview =
+        gamepad && desktop.overview?.workspaces?.strip == true;
     final displayLayout = widget.displayLayout;
     final minimizedWindowPlacement = widget.minimizedWindowPlacement;
     final showFrameTimingOverlay = widget.showFrameTimingOverlay;
@@ -995,7 +1001,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                         onCancelOverviewDrag: onCancelOverviewDrag,
                         overviewEntryFrames: _overviewEntryFrames,
                         overviewDepartingFrames: _overviewDepartingFrames,
-                        swipeOverviewUpCloses: gamepad,
+                        swipeOverviewUpTerminates: gamepad,
                         onOverviewFling: gamepad ? _flingOverview : null,
                         onOverviewPanStart: gamepad ? _stopOverviewFling : null,
                         heldLayers: heldLayers,
@@ -1014,14 +1020,23 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                 decoration: DesktopWorkspaceOverviewDeck(
                   desktop: desktop,
                   onSelectWorkspace: widget.onSelectOverviewWorkspace,
+                  onPanStart: gamepadStripOverview ? _stopOverviewFling : null,
+                  onPanUpdate: gamepadStripOverview
+                      ? (delta) => ref
+                            .read(desktopWorkspaceProvider.notifier)
+                            .moveOverviewBy(-1, delta)
+                      : null,
+                  onPanFling: gamepadStripOverview ? _flingOverview : null,
                 ),
-                onBarrierPan: gamepad
+                onBarrierPan: gamepadStripOverview
                     ? (delta) => ref
                           .read(desktopWorkspaceProvider.notifier)
                           .moveOverviewBy(-1, delta)
                     : null,
-                onBarrierFling: gamepad ? _flingOverview : null,
-                onBarrierPanStart: gamepad ? _stopOverviewFling : null,
+                onBarrierFling: gamepadStripOverview ? _flingOverview : null,
+                onBarrierPanStart: gamepadStripOverview
+                    ? _stopOverviewFling
+                    : null,
                 foregroundControls: <Widget>[
                   surfacePlane(ShellSurfaceLayer.desktopControls),
                 ],
@@ -1071,7 +1086,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                         onCancelOverviewDrag: onCancelOverviewDrag,
                         overviewEntryFrames: _overviewEntryFrames,
                         overviewDepartingFrames: _overviewDepartingFrames,
-                        swipeOverviewUpCloses: gamepad,
+                        swipeOverviewUpTerminates: gamepad,
                         onOverviewFling: gamepad ? _flingOverview : null,
                         onOverviewPanStart: gamepad ? _stopOverviewFling : null,
                         heldLayers: heldLayers,

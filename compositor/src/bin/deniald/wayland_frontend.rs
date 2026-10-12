@@ -1,3 +1,5 @@
+#[cfg(feature = "flutter")]
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
@@ -127,6 +129,8 @@ use super::window_grab::pointer_grab_drives_window;
 use super::window_grab::{
     MoveSurfaceGrab, ResizeEdges, ResizeSurfaceGrab, checked_pointer_grab, constrain_dimension,
 };
+#[cfg(feature = "flutter")]
+use super::window_layout::LayoutSpace;
 use super::window_layout::{WindowLayout, create_window_layout};
 use super::window_placement_store::{
     RestoredWindowPlacement, WindowIdentity, WindowPlacementState, WindowPlacementStore,
@@ -211,7 +215,9 @@ pub(crate) use window_layout_adapter::LayoutDropTarget;
 #[path = "wayland_frontend/window_management.rs"]
 mod window_management;
 #[cfg(feature = "flutter")]
-pub(crate) use window_management::minimize_toplevel_by_id;
+pub(crate) use window_management::{
+    minimize_toplevel_by_id, publish_gamepad_backgrounded_geometry,
+};
 #[cfg(feature = "flutter")]
 #[path = "wayland_frontend/window_outputs.rs"]
 mod window_outputs;
@@ -485,6 +491,8 @@ pub(super) struct WaylandFrontend {
     next_surface_id: u64,
     window_registry: WindowRegistry,
     window_layout: Box<dyn WindowLayout<ObjectId>>,
+    #[cfg(feature = "flutter")]
+    gamepad_resize_layout_snapshot: Option<(LayoutSpace, Box<dyn Any>)>,
     #[cfg(feature = "flutter")]
     workspace_drop_preview: Option<window_management::WorkspaceDropPreview>,
     #[cfg(feature = "flutter")]
@@ -1026,7 +1034,8 @@ mod window_geometry_intent_tests {
     }
 
     #[test]
-    fn unchanged_geometry_contract_preserves_its_reassertion_guard() {        let target = Rectangle::new((10, 20).into(), (800, 600).into());
+    fn unchanged_geometry_contract_preserves_its_reassertion_guard() {
+        let target = Rectangle::new((10, 20).into(), (800, 600).into());
         let mut previous =
             WindowGeometryIntent::for_contract(target, WindowGeometryAuthority::Layout, None);
         assert_eq!(
@@ -1040,10 +1049,7 @@ mod window_geometry_intent_tests {
             Some(previous),
         );
         assert_eq!(unchanged.reassertion, WindowGeometryReassertion::Sent);
-        assert_eq!(
-            unchanged.resends_remaining,
-            GEOMETRY_REASSERTION_RESENDS
-        );
+        assert_eq!(unchanged.resends_remaining, GEOMETRY_REASSERTION_RESENDS);
 
         let changed = WindowGeometryIntent::for_contract(
             Rectangle::new((10, 20).into(), (900, 600).into()),

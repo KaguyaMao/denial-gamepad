@@ -481,7 +481,7 @@ class _ShortcutIconButton extends StatelessWidget {
       tooltip: tooltip,
       onPressed: busy ? null : onPressed,
       iconSize: 18,
-      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
       padding: EdgeInsets.zero,
       style: IconButton.styleFrom(
         foregroundColor: foreground,

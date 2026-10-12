@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dev_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+output_config="${DENIAL_MOBILE_OUTPUT_CONFIG:-$dev_root/dev/denial-mobile-outputs.conf}"
+drm_device="${DENIAL_MOBILE_DRM_DEVICE:-/dev/dri/by-path/pci-0000:c2:00.0-card}"
+
+if [[ ! -r "$output_config" ]]; then
+  printf 'denial-mobile-session: missing output config: %s\n' "$output_config" >&2
+  exit 1
+fi
+if [[ ! -c "$drm_device" ]]; then
+  printf 'denial-mobile-session: missing DRM device: %s\n' "$drm_device" >&2
+  exit 1
+fi
+
+export DENIAL_SHELL_PROFILE=mobile
+export DENIAL_PC_OUTPUT_CONFIG="$output_config"
+export DENIAL_PC_DRM_DEVICE="$drm_device"
+
+# Keep a per-profile log; the display manager's session log is commonly
+# truncated on the next login, which would otherwise erase startup diagnostics.
+log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/denial"
+session_log="$log_dir/mobile-session.log"
+if mkdir -p "$log_dir" 2>/dev/null && : >>"$session_log" 2>/dev/null; then
+  printf '\n===== denial mobile session %s =====\n' "$(date '+%F %T')" \
+    >>"$session_log" || true
+  exec >>"$session_log" 2>&1
+fi
+
+exec "$dev_root/tools/denial-pc" session

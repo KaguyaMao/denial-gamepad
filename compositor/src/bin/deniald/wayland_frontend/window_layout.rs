@@ -8,7 +8,7 @@ use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::WaylandFocus;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::super::output_topology::ScrollingLayoutAxis;
 #[cfg(feature = "flutter")]
@@ -23,6 +23,8 @@ use super::super::window_layout::{
 };
 #[cfg(feature = "flutter")]
 use super::WindowId;
+#[cfg(feature = "flutter")]
+use super::WindowIdentity;
 use super::managed_window::ManagedWindow;
 #[cfg(feature = "flutter")]
 use super::shell_content_geometry;
@@ -182,8 +184,10 @@ impl WaylandFrontend {
     }
 
     pub(crate) fn window_is_layout_managed(&self, window: &Window) -> bool {
-        self.window_root_surface(window)
-            .is_some_and(|surface| self.window_layout.contains(&surface.id()))
+        self.window_root_surface(window).is_some_and(|surface| {
+            self.window_layout.contains(&surface.id())
+                && !self.window_layout.is_suspended(&surface.id())
+        })
     }
 
     pub(super) fn window_is_scrolling_layout_managed(&self, window: &Window) -> bool {
@@ -759,51 +763,162 @@ impl WaylandFrontend {
         Some(vec![(window.clone(), self.window_geometry_target(window))])
     }
 
-    /// Captures the lone tile's geometry at the start of a resize drag so an
-    /// eviction can restore the pre-drag size.
+    /// Captures the geometry of every tile in the resized Gamepad workspace so
+    /// any tile evicted by the drag can restore its pre-drag size.
     #[cfg(feature = "flutter")]
-    pub(crate) fn snapshot_gamepad_single_geometry(&mut self, window_id: u64) {
+    pub(crate) fn snapshot_gamepad_resize_geometry(&mut self, window_id: u64) {
         let Some(window) = self.window_for_id(window_id) else {
             return;
         };
-        let Some(root) = self.window_root_surface(&window) else {
+        let Some(space) = self.managed_layout_space(&window) else {
             return;
         };
-        if let Some(record) = self.window_record_for_surface_mut(&root.id()) {
-            record.gamepad_single_snapshot = Some(record.gamepad_single_geometry);
+        self.gamepad_resize_layout_snapshot = self
+            .window_layout
+            .snapshot_space(space)
+            .map(|snapshot| (space, snapshot));
+
+        let mut snapshots = self
+            .current_layout_placements()
+            .into_iter()
+            .filter(|placement| self.window_layout.space_for(&placement.window) == Some(space))
+            .filter_map(|placement| {
+                self.surface_ids
+                    .get(&placement.window)
+                    .copied()
+                    .map(|stable_id| (stable_id, placement.geometry))
+            })
+            .collect::<Vec<_>>();
+        if !snapshots
+            .iter()
+            .any(|(stable_id, _)| *stable_id == window_id)
+        {
+            snapshots.push((window_id, self.window_geometry_target(&window)));
+        }
+        for record in self.window_registry.values_mut() {
+            record.gamepad_resize_snapshot = None;
+        }
+        for (stable_id, geometry) in snapshots {
+            if let Some(record) = self.window_record_mut(stable_id) {
+                record.gamepad_resize_snapshot = Some(geometry);
+            }
         }
     }
 
-    /// Restores the geometry captured by [Self::snapshot_gamepad_single_geometry]
-    /// when a resize evicts the dragged tile.
+    /// Restores the exact split ratios captured when the resize began. The
+    /// following minimize suspends only the tiles which crossed the close
+    /// threshold, so restoring one later can recover its former split.
     #[cfg(feature = "flutter")]
-    pub(crate) fn restore_gamepad_single_geometry(&mut self, window_id: u64) {
+    pub(crate) fn restore_gamepad_resize_layout(&mut self) -> bool {
+        let Some((space, snapshot)) = self.gamepad_resize_layout_snapshot.take() else {
+            return false;
+        };
+        if !self.window_layout.restore_space(space, snapshot.as_ref()) {
+            warn!(
+                ?space,
+                "Gamepad resize layout changed concurrently; preserving the current tree"
+            );
+            return false;
+        }
+        self.arrange_layout_windows();
+        true
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn finish_gamepad_resize(&mut self) {
+        self.gamepad_resize_layout_snapshot = None;
+        for record in self.window_registry.values_mut() {
+            record.gamepad_resize_snapshot = None;
+        }
+    }
+
+    /// Restores the geometry captured by [Self::snapshot_gamepad_resize_geometry]
+    /// when a resize sends a tile to the background.
+    ///
+    /// Returns whether the pre-drag rectangle was applied. Callers must not
+    /// publish the squeezed sliver as the final placement when this is false.
+    #[cfg(feature = "flutter")]
+    pub(crate) fn restore_gamepad_resize_geometry(&mut self, window_id: u64) -> bool {
         let Some(window) = self.window_for_id(window_id) else {
-            return;
+            return false;
         };
         let Some(root) = self.window_root_surface(&window) else {
-            return;
+            return false;
         };
-        if let Some(record) = self.window_record_for_surface_mut(&root.id())
-            && let Some(snapshot) = record.gamepad_single_snapshot.take()
-        {
-            record.gamepad_single_geometry = snapshot;
+        let Some(snapshot) = self
+            .window_record_mut(window_id)
+            .and_then(|record| record.gamepad_resize_snapshot.take())
+        else {
+            return false;
+        };
+        if let Some(record) = self.window_record_for_surface_mut(&root.id()) {
+            record.layout_restore_geometry = Some(snapshot);
+            // A restored lone tile uses this remembered frame rather than the
+            // minimum-size rectangle that triggered its backgrounding.
+            record.gamepad_single_geometry = Some(snapshot);
         }
+        self.set_window_geometry_target(&window, snapshot);
+        if let Some(managed) = ManagedWindow::new(&window) {
+            managed.prepare_shell_geometry(snapshot);
+        }
+        true
+    }
+
+    /// True when overview restore should replace the foreground instead of
+    /// tiling. Both windows must already own the work area; a split pane or a
+    /// resized lone tile falls through to ordinary free-space admission.
+    #[cfg(feature = "flutter")]
+    fn gamepad_exclusive_restore_replaces(&self, window: &Window) -> bool {
+        let Some(root) = self.window_root_surface(window) else {
+            return false;
+        };
+        let window_id = root.id();
+        let current = self.window_geometry_target(window);
+        let restore = self
+            .window_record_for_surface(&window_id)
+            .and_then(|record| {
+                record
+                    .layout_restore_geometry
+                    .or(record.gamepad_single_geometry)
+            })
+            .filter(|geometry| has_visible_size(*geometry))
+            .unwrap_or(current);
+        let Some(physical_output) = self
+            .output_for_geometry(restore)
+            .map(|output| output.id)
+            .or(self.ticker_output)
+            .or_else(|| self.outputs.first().map(|output| output.id))
+        else {
+            return false;
+        };
+        let Some(output) = self.outputs.iter().find(|output| output.id == physical_output) else {
+            return false;
+        };
+        let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
+        let space = self.layout_space_for_window(window, physical_output);
+        let foreground = self
+            .current_layout_placements()
+            .into_iter()
+            .filter(|placement| self.window_layout.space_for(&placement.window) == Some(space))
+            .collect::<Vec<_>>();
+        gamepad_overview_restore_replaces(restore, &foreground, work_area)
     }
 
     /// Touch admission. When the target workspace still has free space the new
-    /// window tiles in beside the existing ones; once the workspace is full the
-    /// new window replaces every existing one and owns the whole work area.
-    /// Small dialog-like windows (portal choosers, file pickers) never clear
-    /// the workspace: replacing it would unmap capture targets and the
-    /// ScreenCast source list.
+    /// process tiles in beside the existing ones; once the workspace is full
+    /// the new process replaces every existing tile. Protocol-parented dialogs
+    /// are stacked with their actual parent before reaching this policy.
     #[cfg(feature = "flutter")]
     fn admit_gamepad_window(
         &mut self,
-        window: &ObjectId,
+        window: &Window,
         space: LayoutSpace,
         restore: Rectangle<i32, Logical>,
-    ) {
+        fill_workspace: bool,
+    ) -> bool {
+        let Some(window_id) = self.window_root_surface(window).map(|root| root.id()) else {
+            return false;
+        };
         let placements = self
             .current_layout_placements()
             .into_iter()
@@ -812,20 +927,41 @@ impl WaylandFrontend {
         let existing = placements
             .iter()
             .map(|placement| placement.window.clone())
-            .filter(|candidate| candidate != window)
+            .filter(|candidate| candidate != &window_id)
             .collect::<Vec<_>>();
         if existing.is_empty() {
-            return;
+            return false;
         }
         let Some(output) = self.outputs.iter().find(|output| output.id == space.output) else {
-            return;
+            return false;
         };
         let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
-        if gamepad_new_window_is_dialog(restore, work_area) {
-            return;
+        if !fill_workspace && self.window_has_transient_parent(window) {
+            let transient_parent = self
+                .transient_parent_stable_id(window)
+                .and_then(|parent_id| self.window_for_id(parent_id))
+                .filter(|parent| {
+                    let output = self
+                        .output_for_geometry(self.window_geometry_target(parent))
+                        .map(|output| output.id)
+                        .unwrap_or(space.output);
+                    self.layout_space_for_window(parent, output) == space
+                })
+                .map(|parent| self.window_geometry_target(&parent));
+            if let Some(peer) = transient_parent {
+                self.float_gamepad_overlay_window(window, restore, peer, work_area);
+                return true;
+            }
+            return false;
         }
-        if gamepad_workspace_has_free_space(&placements, work_area) {
-            return;
+        if !fill_workspace && gamepad_workspace_has_free_space(&placements, work_area) {
+            return false;
+        }
+        if fill_workspace {
+            info!(
+                window_id = ?window_id,
+                "giving Denial Settings the full touch workspace"
+            );
         }
         for displaced in existing {
             let Some(previous) = self.window_for_layout_id(&displaced) else {
@@ -835,18 +971,203 @@ impl WaylandFrontend {
                 managed.prepare_minimized(true);
             }
             self.set_surface_minimized(displaced, true);
-            self.detach_window_from_layout(&previous, false);
+            self.remove_window_from_layout(&previous, false);
         }
+        false
     }
 
-    /// Sibling tiles squeezed to nothing by a resize in `window`'s layout space.
+    #[cfg(feature = "flutter")]
+    fn gamepad_window_process_id(&self, window: &Window) -> Option<u32> {
+        let managed = ManagedWindow::new(window)?;
+        if managed.facts().x11 {
+            #[cfg(feature = "xwayland")]
+            {
+                return window.x11_surface().and_then(|surface| surface.pid());
+            }
+            #[cfg(not(feature = "xwayland"))]
+            return None;
+        }
+        let root = self.window_root_surface(window)?;
+        let pid = root
+            .client()?
+            .get_data::<super::handlers::DenialClientState>()?
+            .peer_pid?;
+        u32::try_from(pid).ok()
+    }
+
+    /// Returns the actual transient parent's geometry, or a conservative
+    /// same-application fallback for a dialog-sized unparented helper toplevel.
+    #[cfg(feature = "flutter")]
+    fn gamepad_application_stack_peer(
+        &self,
+        window: &Window,
+        target_space: LayoutSpace,
+        restore: Rectangle<i32, Logical>,
+        work_area: Rectangle<i32, Logical>,
+    ) -> Option<Rectangle<i32, Logical>> {
+        if self.window_has_transient_parent(window) {
+            if let Some(parent_id) = self.transient_parent_stable_id(window)
+                && let Some(parent) = self.window_for_id(parent_id)
+            {
+                if self.window_is_effectively_minimized(&parent) {
+                    return None;
+                }
+                let parent_root = self.window_root_surface(&parent)?;
+                if !parent_root.is_alive() {
+                    return None;
+                }
+                let output = self
+                    .output_for_geometry(self.window_geometry_target(&parent))
+                    .map(|output| output.id)
+                    .unwrap_or(target_space.output);
+                let parent_space = self
+                    .window_layout
+                    .space_for(&parent_root.id())
+                    .unwrap_or_else(|| self.layout_space_for_window(&parent, output));
+                if parent_space != target_space {
+                    return None;
+                }
+                return Some(
+                    self.current_layout_placements()
+                        .into_iter()
+                        .find(|placement| placement.window == parent_root.id())
+                        .map(|placement| placement.geometry)
+                        .unwrap_or_else(|| self.window_geometry_target(&parent)),
+                );
+            }
+            if self
+                .transient_parent_workspace_for_window(window)
+                .is_some_and(|location| {
+                    LayoutSpace::new(location.output, location.workspace) != target_space
+                })
+            {
+                return None;
+            }
+            return self.transient_parent_geometry_for_window(window);
+        }
+
+        // KWin only makes a child follow a parent when the client declares a
+        // transient relationship. For clients that omit it, identity is only
+        // a secondary hint: require a dialog-sized new surface too, so a
+        // second ordinary application window is not silently collapsed onto
+        // its sibling.
+        let dialog_sized = gamepad_new_window_is_dialog(restore, work_area);
+        let process_id = self.gamepad_window_process_id(window);
+        let identity = self.window_identity(window);
+        if process_id.is_none() && identity.is_none() {
+            return None;
+        }
+        let focused = self.focused_layout_window();
+        let layout_geometries = self
+            .current_layout_placements()
+            .into_iter()
+            .map(|placement| (placement.window, placement.geometry))
+            .collect::<HashMap<_, _>>();
+        let mut minimized_peer = None;
+        let mut visible_peer = None;
+        for peer in self.space.elements() {
+            if peer == window {
+                continue;
+            }
+            let peer_process_id = self.gamepad_window_process_id(peer);
+            let peer_identity = self.window_identity(peer);
+            if !gamepad_auxiliary_identity_matches(
+                dialog_sized,
+                process_id,
+                peer_process_id,
+                identity.as_ref(),
+                peer_identity.as_ref(),
+            ) {
+                continue;
+            }
+            let Some(root) = self.window_root_surface(peer) else {
+                continue;
+            };
+            if !root.is_alive() {
+                continue;
+            }
+            let peer_id = root.id();
+            let peer_space = self.window_layout.space_for(&peer_id).unwrap_or_else(|| {
+                let output = self
+                    .output_for_geometry(self.window_geometry_target(peer))
+                    .map(|output| output.id)
+                    .unwrap_or(target_space.output);
+                self.layout_space_for_window(peer, output)
+            });
+            if peer_space != target_space {
+                continue;
+            }
+            let geometry = layout_geometries
+                .get(&peer_id)
+                .copied()
+                .unwrap_or_else(|| self.window_geometry_target(peer));
+            if !self.surface_is_minimized(&peer_id) {
+                if focused.as_ref() == Some(&peer_id) {
+                    return Some(geometry);
+                }
+                visible_peer.get_or_insert(geometry);
+            } else {
+                minimized_peer.get_or_insert(geometry);
+            }
+        }
+        visible_peer.or(minimized_peer)
+    }
+
+    #[cfg(feature = "flutter")]
+    fn float_gamepad_overlay_window(
+        &mut self,
+        window: &Window,
+        restore: Rectangle<i32, Logical>,
+        peer: Rectangle<i32, Logical>,
+        work_area: Rectangle<i32, Logical>,
+    ) {
+        let target = center_gamepad_stacked_frame(restore, peer, work_area);
+        info!(
+            x = target.loc.x,
+            y = target.loc.y,
+            width = target.size.w,
+            height = target.size.h,
+            "stacking a secondary Gamepad toplevel over its peer"
+        );
+        if let Some(root) = self.window_root_surface(window) {
+            if let Some(record) = self.ensure_window_record_for_surface(&root.id()) {
+                if !record.gamepad_floating_overlay {
+                    record.gamepad_overlay_restore_geometry = record
+                        .layout_restore_geometry
+                        .filter(|geometry| has_visible_size(*geometry))
+                        .or_else(|| has_visible_size(restore).then_some(restore));
+                }
+                record.gamepad_floating_overlay = true;
+                record.layout_restore_geometry = Some(target);
+                record.gamepad_single_geometry = None;
+            }
+        }
+        // A secondary same-application toplevel is an overlay, not a new tile.
+        // Clear a client-requested maximize/fullscreen state and configure the
+        // chosen natural overlay size before it is exposed in the scene.
+        let managed = ManagedWindow::new(window);
+        if let Some(managed) = managed.as_ref() {
+            managed.clear_geometry_constraints();
+        }
+        self.set_window_geometry_target(window, target);
+        if let Some(managed) = managed {
+            managed.prepare_shell_geometry(target);
+        }
+        // Reconciliation can run because the parent moved or resized. Raising
+        // the child must preserve z-order without stealing keyboard focus from
+        // the parent that the user is still operating.
+        self.raise_window(window, false);
+    }
+
+    /// Tiles squeezed to nothing by a resize in `window`'s layout space,
+    /// including the dragged tile itself.
     ///
     /// The touch shell presents one workspace. Dragging a pane's border until a
-    /// neighbour has no room left evicts that neighbour into the background
-    /// instead of leaving it as a sliver. Callers minimize each returned window;
-    /// the layout then collapses the freed node.
+    /// tile has no room left backgrounds it instead of leaving it as a sliver.
+    /// The Dwindle node is suspended so active siblings fill the space while a
+    /// later restore can recover the original split ratio.
     #[cfg(feature = "flutter")]
-    pub(crate) fn layout_siblings_squeezed_out(&self, window: &Window) -> Vec<u64> {
+    pub(crate) fn layout_tiles_squeezed_out(&self, window: &Window) -> Vec<u64> {
         let Some(window_id) = self.window_root_surface(window).map(|root| root.id()) else {
             return Vec::new();
         };
@@ -1138,10 +1459,34 @@ impl WaylandFrontend {
             return false;
         };
         let window_id = root.id();
+        #[cfg(feature = "flutter")]
+        self.sync_transient_parent_context(window);
         let remembered_anchor = self
             .window_record_for_surface_mut(&window_id)
             .and_then(|record| record.layout_insertion_anchor.take());
+        #[cfg(feature = "flutter")]
+        let gamepad_overlay_candidate = self.gamepad_shell
+            && (!self.window_layout.contains(&window_id)
+                || self.window_has_transient_parent(window)
+                || self
+                    .window_record_for_surface(&window_id)
+                    .is_some_and(|record| record.gamepad_floating_overlay));
+        #[cfg(feature = "flutter")]
+        if gamepad_overlay_candidate && self.reconcile_gamepad_stacked_window(window).is_some() {
+            return true;
+        }
         if !self.window_layout_eligible(window) {
+            #[cfg(feature = "flutter")]
+            if self.gamepad_shell && self.surface_is_minimized(&window_id) {
+                if self.window_layout.is_suspended(&window_id) {
+                    return false;
+                }
+                let suspended = self.window_layout.suspend_window(&window_id);
+                if suspended {
+                    self.arrange_layout_windows();
+                }
+                return suspended;
+            }
             let removed = self.window_layout.remove(&window_id);
             if removed {
                 self.restore_detached_window_geometry(window, &window_id);
@@ -1152,6 +1497,19 @@ impl WaylandFrontend {
             return removed;
         }
         let adopt_scrolling_maximize = self.should_adopt_scrolling_maximize(window);
+        // A suspended leaf used to unsuspend in place. That split an exclusive
+        // window coming back from overview against the exclusive window already
+        // in front. Drop the suspended node and re-enter admission below.
+        #[cfg(feature = "flutter")]
+        let force_gamepad_replace = if self.gamepad_shell
+            && self.window_layout.is_suspended(&window_id)
+        {
+            let replaces = self.gamepad_exclusive_restore_replaces(window);
+            self.detach_window_from_layout(window, false);
+            replaces
+        } else {
+            false
+        };
         if self.window_layout.contains(&window_id) {
             if adopt_scrolling_maximize && self.adopt_scrolling_maximize(&window_id) {
                 self.arrange_layout_windows();
@@ -1187,7 +1545,13 @@ impl WaylandFrontend {
         let space = self.layout_space_for_window(window, physical_output);
         #[cfg(feature = "flutter")]
         if self.gamepad_shell {
-            self.admit_gamepad_window(&window_id, space, restore);
+            let fill_workspace = force_gamepad_replace
+                || self
+                    .window_identity(window)
+                    .is_some_and(|identity| identity.app_id() == "dev.denial.settings");
+            if self.admit_gamepad_window(window, space, restore, fill_workspace) {
+                return true;
+            }
         }
         if has_visible_size(restore) {
             self.ensure_window_record_for_surface(&window_id)
@@ -1212,6 +1576,81 @@ impl WaylandFrontend {
         }
         self.arrange_layout_windows();
         true
+    }
+
+    /// Keeps a Gamepad auxiliary toplevel above its real parent, or applies the
+    /// deliberately conservative same-application fallback for a dialog-shaped
+    /// unparented helper. A stale overlay flag is cleared when neither relation
+    /// still exists, allowing the window to re-enter the managed layout.
+    #[cfg(feature = "flutter")]
+    pub(super) fn reconcile_gamepad_stacked_window(
+        &mut self,
+        window: &Window,
+    ) -> Option<Rectangle<i32, Logical>> {
+        if !self.gamepad_shell {
+            return None;
+        }
+        let root = self.window_root_surface(window)?;
+        let window_id = root.id();
+        let was_overlay = self
+            .window_record_for_surface(&window_id)
+            .is_some_and(|record| record.gamepad_floating_overlay);
+        let current = self.window_geometry_target(window);
+        let restore = self
+            .window_record_for_surface(&window_id)
+            .and_then(|record| record.layout_restore_geometry)
+            .filter(|geometry| has_visible_size(*geometry))
+            .unwrap_or_else(|| self.stacking_geometry_for_layout(window, current));
+        let physical_output = self
+            .output_for_geometry(restore)
+            .map(|output| output.id)
+            .or(self.ticker_output)
+            .or_else(|| self.outputs.first().map(|output| output.id))?;
+        let space = self.layout_space_for_window(window, physical_output);
+        let output = self
+            .outputs
+            .iter()
+            .find(|output| output.id == space.output)?;
+        let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
+        let fill_workspace = self
+            .window_identity(window)
+            .is_some_and(|identity| identity.app_id() == "dev.denial.settings");
+        let parented = self.window_has_transient_parent(window);
+        let peer = if fill_workspace && !parented {
+            None
+        } else {
+            self.gamepad_application_stack_peer(window, space, restore, work_area)
+        };
+        let Some(peer) = peer else {
+            if was_overlay {
+                let still_parented = self.window_has_transient_parent(window);
+                if let Some(record) = self.window_record_for_surface_mut(&window_id) {
+                    record.gamepad_floating_overlay = false;
+                    if !still_parented {
+                        record.layout_restore_geometry =
+                            record.gamepad_overlay_restore_geometry.take();
+                    }
+                }
+            }
+            return None;
+        };
+
+        if let Some(parent_id) = self.transient_parent_stable_id(window)
+            && let Some(parent_location) = self.workspace_location(parent_id)
+        {
+            self.sync_transient_family_workspace(window, parent_location);
+        }
+
+        if self.window_layout.contains(&window_id) {
+            self.window_layout.remove(&window_id);
+            if let Some(record) = self.window_record_for_surface_mut(&window_id) {
+                record.gamepad_floating_overlay = true;
+            }
+            self.arrange_layout_windows();
+        }
+        let target = center_gamepad_stacked_frame(restore, peer, work_area);
+        self.float_gamepad_overlay_window(window, restore, peer, work_area);
+        Some(target)
     }
 
     /// XDG activates a new toplevel before its initial commit finalizes parent
@@ -1242,7 +1681,28 @@ impl WaylandFrontend {
         window: &Window,
         forget_restore: bool,
     ) -> bool {
-        let removed = self.detach_window_from_layout(window, forget_restore);
+        let removed = {
+            #[cfg(feature = "flutter")]
+            if self.gamepad_shell
+                && self
+                    .window_root_surface(window)
+                    .is_some_and(|root| self.surface_is_minimized(&root.id()))
+            {
+                if forget_restore {
+                    if let Some(root) = self.window_root_surface(window) {
+                        if let Some(record) = self.window_record_for_surface_mut(&root.id()) {
+                            record.layout_restore_geometry = None;
+                        }
+                    }
+                }
+                self.window_root_surface(window)
+                    .is_some_and(|root| self.window_layout.suspend_window(&root.id()))
+            } else {
+                self.detach_window_from_layout(window, forget_restore)
+            }
+            #[cfg(not(feature = "flutter"))]
+            self.detach_window_from_layout(window, forget_restore)
+        };
         if removed {
             self.arrange_layout_windows();
         }
@@ -1614,7 +2074,14 @@ impl WaylandFrontend {
         #[cfg(feature = "flutter")]
         if self.gamepad_shell {
             // Dialog toplevels are tiles too; protocol popups remain transient.
-            return root.is_alive() && !minimized && !facts.override_redirect;
+            let stacked = self
+                .window_record_for_surface(&root.id())
+                .is_some_and(|record| record.gamepad_floating_overlay);
+            return root.is_alive()
+                && !minimized
+                && !facts.override_redirect
+                && !self.window_has_transient_parent(window)
+                && !stacked;
         }
         let already_managed = self.window_layout.contains(&root.id());
         LayoutWindowProperties {
@@ -1769,10 +2236,13 @@ impl WaylandFrontend {
     fn layout_space_for_window(&self, window: &Window, physical_output: OutputId) -> LayoutSpace {
         #[cfg(feature = "flutter")]
         {
-            let location = self
+            let own_location = self
                 .window_root_surface(window)
                 .and_then(|root| self.surface_ids.get(&root.id()).copied())
                 .and_then(|stable_id| self.workspace_location(stable_id));
+            let location = self
+                .transient_parent_workspace_for_window(window)
+                .or(own_location);
             return location.map_or_else(
                 || LayoutSpace::new(physical_output, self.active_workspace(physical_output)),
                 |location| LayoutSpace::new(location.output, location.workspace),
@@ -2060,6 +2530,48 @@ fn gamepad_squeeze_threshold(work_area: Rectangle<i32, Logical>) -> i64 {
     (extent / 10).max(96)
 }
 
+#[cfg(feature = "flutter")]
+fn gamepad_auxiliary_identity_matches(
+    dialog_sized: bool,
+    process_id: Option<u32>,
+    peer_process_id: Option<u32>,
+    identity: Option<&WindowIdentity>,
+    peer_identity: Option<&WindowIdentity>,
+) -> bool {
+    dialog_sized
+        && (process_id.is_some() && process_id == peer_process_id
+            || identity.is_some() && identity == peer_identity)
+}
+
+/// Overview restore replaces only when both the returning window and the
+/// single foreground tile already fill the work area. Any other combination
+/// uses free-space admission: tile beside when space remains, replace when the
+/// workspace is full.
+#[cfg(feature = "flutter")]
+fn gamepad_overview_restore_replaces<Id>(
+    restored: Rectangle<i32, Logical>,
+    foreground: &[LayoutPlacement<Id>],
+    work_area: Rectangle<i32, Logical>,
+) -> bool {
+    gamepad_geometry_fills_work_area(restored, work_area)
+        && foreground.len() == 1
+        && !gamepad_workspace_has_free_space(foreground, work_area)
+}
+
+#[cfg(feature = "flutter")]
+fn gamepad_geometry_fills_work_area(
+    geometry: Rectangle<i32, Logical>,
+    work_area: Rectangle<i32, Logical>,
+) -> bool {
+    !gamepad_workspace_has_free_space(
+        &[LayoutPlacement {
+            window: (),
+            geometry,
+        }],
+        work_area,
+    )
+}
+
 /// True when the gamepad workspace's visible tiles leave usable free space, so
 /// the next application tiles in instead of replacing the whole workspace.
 /// Dwindle tiles never overlap, so comparing summed areas to the work area is
@@ -2080,11 +2592,11 @@ fn gamepad_workspace_has_free_space<Id>(
     total > 0 && covered < total - total / 50
 }
 
-/// Small dialog-like windows must not clear a full gamepad workspace.
+/// Small dialog-like windows should float over a peer in the gamepad profile.
 ///
 /// Portal ScreenCast choosers, file pickers, and other dialogs are a fraction
-/// of the work area. Replacing the workspace for them would unmap the very
-/// capture targets the chooser lists, leaving OBS with no window sources.
+/// of the work area. Tiling them could resize or obscure the capture target
+/// that their source chooser is presenting.
 #[cfg(feature = "flutter")]
 fn gamepad_new_window_is_dialog(
     restore: Rectangle<i32, Logical>,
@@ -2093,8 +2605,7 @@ fn gamepad_new_window_is_dialog(
     if !has_visible_size(restore) || !has_visible_size(work_area) {
         return false;
     }
-    let window_area =
-        i64::from(restore.size.w.max(0)) * i64::from(restore.size.h.max(0));
+    let window_area = i64::from(restore.size.w.max(0)) * i64::from(restore.size.h.max(0));
     let total = i64::from(work_area.size.w.max(0)) * i64::from(work_area.size.h.max(0));
     total > 0 && window_area * 5 < total * 2
 }
@@ -2119,6 +2630,47 @@ fn fit_gamepad_single_frame(
                 .clamp(bounds.loc.y, bounds.loc.y + bounds.size.h - height),
         )),
         Size::from((width, height)),
+    )
+}
+
+/// Center a same-application auxiliary toplevel over its peer without adding a
+/// second tiled leaf. A size-less client inherits a comfortable fraction of
+/// the peer's current size; maximized/oversized requests are reduced
+/// proportionally so an updater dialog cannot take over the whole workspace.
+#[cfg(feature = "flutter")]
+fn center_gamepad_stacked_frame(
+    mut requested: Rectangle<i32, Logical>,
+    peer: Rectangle<i32, Logical>,
+    work_area: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    if work_area.size.w <= 0 || work_area.size.h <= 0 {
+        return requested;
+    }
+    if requested.size.w <= 0 {
+        requested.size.w = (peer.size.w * 3 / 4).max(64);
+    }
+    if requested.size.h <= 0 {
+        requested.size.h = (peer.size.h * 3 / 4).max(64);
+    }
+    let maximum_width = (peer.size.w.min(work_area.size.w).max(1).saturating_mul(9) / 10).max(1);
+    let maximum_height = (peer.size.h.min(work_area.size.h).max(1).saturating_mul(9) / 10).max(1);
+    let scale = 1.0_f64
+        .min(f64::from(maximum_width) / f64::from(requested.size.w.max(1)))
+        .min(f64::from(maximum_height) / f64::from(requested.size.h.max(1)));
+    let width = (f64::from(requested.size.w.max(1)) * scale)
+        .round()
+        .clamp(1.0, f64::from(maximum_width)) as i32;
+    let height = (f64::from(requested.size.h.max(1)) * scale)
+        .round()
+        .clamp(1.0, f64::from(maximum_height)) as i32;
+    let peer_center_x = peer.loc.x + peer.size.w / 2;
+    let peer_center_y = peer.loc.y + peer.size.h / 2;
+    fit_gamepad_single_frame(
+        Rectangle::new(
+            Point::from((peer_center_x - width / 2, peer_center_y - height / 2)),
+            Size::from((width, height)),
+        ),
+        work_area,
     )
 }
 
@@ -2171,7 +2723,39 @@ mod tests {
     }
 
     #[test]
-    fn gamepad_workspace_free_space_requires_usable_remaining_area() {        let work = rect(16, 51, 1200, 700);
+    fn gamepad_overview_restore_replaces_only_two_exclusive_windows() {
+        let work = rect(16, 51, 1200, 700);
+        let exclusive = [LayoutPlacement {
+            window: 1u64,
+            geometry: work,
+        }];
+        assert!(gamepad_overview_restore_replaces(work, &exclusive, work));
+        let split = [
+            LayoutPlacement {
+                window: 1u64,
+                geometry: rect(16, 51, 600, 700),
+            },
+            LayoutPlacement {
+                window: 2u64,
+                geometry: rect(616, 51, 600, 700),
+            },
+        ];
+        assert!(!gamepad_overview_restore_replaces(work, &split, work));
+        assert!(!gamepad_overview_restore_replaces(
+            rect(16, 51, 600, 700),
+            &exclusive,
+            work,
+        ));
+        let resized = [LayoutPlacement {
+            window: 1u64,
+            geometry: rect(16, 51, 800, 700),
+        }];
+        assert!(!gamepad_overview_restore_replaces(work, &resized, work));
+    }
+
+    #[test]
+    fn gamepad_workspace_free_space_requires_usable_remaining_area() {
+        let work = rect(16, 51, 1200, 700);
         let full = [LayoutPlacement {
             window: 1u64,
             geometry: work,
@@ -2198,8 +2782,8 @@ mod tests {
     #[test]
     fn gamepad_dialog_windows_preserve_a_full_workspace() {
         let work = rect(16, 51, 1200, 700);
-        // A portal chooser is a fraction of the work area: it must tile
-        // alongside instead of clearing capture targets.
+        // A portal chooser is a fraction of the work area and floats over its
+        // peer instead of taking a Dwindle leaf.
         assert!(gamepad_new_window_is_dialog(rect(400, 200, 500, 300), work));
         assert!(!gamepad_new_window_is_dialog(rect(16, 51, 1200, 700), work));
         assert!(!gamepad_new_window_is_dialog(rect(16, 51, 600, 700), work));
@@ -2242,6 +2826,77 @@ mod tests {
             i64::from(clamped.size.w) <= gamepad_squeeze_threshold(bounds),
             "a collapsed lone tile must be detectable as squeezed"
         );
+    }
+
+    #[test]
+    fn same_application_gamepad_windows_stack_centered_over_their_peer() {
+        let work_area = rect(16, 16, 1000, 700);
+        let peer = rect(100, 100, 800, 500);
+        assert_eq!(
+            center_gamepad_stacked_frame(rect(0, 0, 300, 200), peer, work_area),
+            rect(350, 250, 300, 200),
+        );
+        let oversized = center_gamepad_stacked_frame(rect(0, 0, 1400, 900), peer, work_area);
+        assert_eq!(oversized, rect(150, 125, 700, 450));
+        assert!(
+            (f64::from(oversized.size.w) / f64::from(oversized.size.h) - 1400.0 / 900.0).abs()
+                < 0.01,
+            "capping an oversized updater must preserve its aspect ratio",
+        );
+    }
+
+    #[cfg(feature = "flutter")]
+    #[test]
+    fn unparented_gamepad_stack_fallback_requires_dialog_shape_and_identity() {
+        let first = WindowIdentity::wayland("org.example.Clash").unwrap();
+        let same = WindowIdentity::wayland("org.example.Clash").unwrap();
+        let other = WindowIdentity::wayland("org.example.Other").unwrap();
+        assert!(gamepad_new_window_is_dialog(
+            rect(0, 0, 640, 480),
+            rect(0, 0, 1920, 1080),
+        ));
+        assert!(!gamepad_new_window_is_dialog(
+            rect(0, 0, 1400, 900),
+            rect(0, 0, 1920, 1080),
+        ));
+        assert!(gamepad_auxiliary_identity_matches(
+            true,
+            Some(10),
+            Some(10),
+            None,
+            None
+        ));
+        assert!(!gamepad_auxiliary_identity_matches(
+            false,
+            Some(10),
+            Some(10),
+            None,
+            None
+        ));
+        assert!(gamepad_auxiliary_identity_matches(
+            true,
+            None,
+            None,
+            Some(&first),
+            Some(&same)
+        ));
+        assert!(gamepad_auxiliary_identity_matches(
+            true,
+            Some(10),
+            Some(10),
+            Some(&first),
+            Some(&other),
+        ));
+        assert!(!gamepad_auxiliary_identity_matches(
+            true,
+            None,
+            None,
+            Some(&first),
+            Some(&other)
+        ));
+        assert!(!gamepad_auxiliary_identity_matches(
+            true, None, None, None, None
+        ));
     }
 
     #[test]

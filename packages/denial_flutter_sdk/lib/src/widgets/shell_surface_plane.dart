@@ -12,10 +12,12 @@ final class ShellSurfaceEntry {
     required this.surface,
     required this.environment,
     required this.placement,
+    required this.layer,
   });
   final ShellSurface surface;
   final ShellSurfaceEnvironment environment;
   final ShellSurfacePlacement placement;
+  final ShellSurfaceLayer layer;
 }
 
 List<ShellSurfaceEntry> resolveShellSurfaces(
@@ -42,6 +44,7 @@ List<ShellSurfaceEntry> resolveShellSurfaces(
           surface: surface,
           environment: environment,
           placement: placement,
+          layer: placement.layer ?? surface.layer,
         ),
       );
     }
@@ -65,7 +68,7 @@ class ShellSurfacePlane extends StatelessWidget {
     fit: StackFit.expand,
     children: [
       for (final entry in entries)
-        if (entry.surface.layer == layer)
+        if (entry.layer == layer)
           Positioned.fromRect(
             key: ValueKey((
               entry.surface.id,

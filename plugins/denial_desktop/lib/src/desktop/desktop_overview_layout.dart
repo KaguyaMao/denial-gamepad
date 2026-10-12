@@ -2,23 +2,43 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 
+/// A Gamepad overview row: uniform slots, with each window's true size inside.
+@immutable
+class DesktopUniformStripArrangement {
+  const DesktopUniformStripArrangement({
+    required this.slots,
+    required this.frames,
+  });
+
+  /// Equal card occupied by one application.
+  final Map<int, Rect> slots;
+
+  /// The application's real geometry drawn inside its [slots] entry.
+  final Map<int, Rect> frames;
+}
+
 /// The stable geometry needed to place one live window in desktop overview.
 class DesktopOverviewItem {
   const DesktopOverviewItem({
     required this.objectId,
     required this.frame,
     required this.z,
+    this.workspaceId = -1,
+    this.minimized = false,
   });
 
   final int objectId;
   final Rect frame;
   final int z;
+  final int workspaceId;
+  final bool minimized;
 
   double get aspectRatio {
     if (frame.width <= 0.0 || frame.height <= 0.0) {
       return 16.0 / 10.0;
     }
-    return (frame.width / frame.height).clamp(0.32, 3.6).toDouble();
+    final ratio = frame.width / frame.height;
+    return ratio.isFinite && ratio > 0.0 ? ratio : 16.0 / 10.0;
   }
 }
 
@@ -48,7 +68,7 @@ abstract final class DesktopOverviewLayout {
   }) {
     final usefulItems = items
         .where(
-          (item) => strip && stripAspectRatio != null
+          (item) => item.minimized || strip
               ? !item.frame.isEmpty
               : isUsefulPreview(item.frame),
         )
@@ -88,9 +108,8 @@ abstract final class DesktopOverviewLayout {
   ///
   /// Touch-first shells present overview as a strip: the row is centred while
   /// it fits and overflows the bounds rather than shrinking cards once it does
-  /// not. When [uniformAspectRatio] is given (the touch profile), every card
-  /// uses that shape — the exclusive-application size — so a split pane is not
-  /// drawn as a narrow sliver next to a full-screen tile.
+  /// not. With [uniformAspectRatio] omitted, each card keeps its source aspect
+  /// ratio, including a Gamepad tile that was backgrounded from a split.
   static Map<int, Rect> _arrangeStrip(
     List<DesktopOverviewItem> items,
     Rect available,
@@ -138,6 +157,89 @@ abstract final class DesktopOverviewLayout {
       left = frame.right + gap;
     }
     return frames;
+  }
+
+  /// One scrolling row of equal slots.
+  ///
+  /// Each slot uses the work area's aspect ratio and 60% of the overview
+  /// viewport height, so several cards stay readable. [DesktopUniformStripArrangement.frames]
+  /// are the real window rectangles projected into those slots; space the
+  /// window does not cover stays empty instead of stretching the texture.
+  /// Split siblings stay adjacent because ordering is workspace, then position.
+  static DesktopUniformStripArrangement? arrangeUniformStrip({
+    required List<DesktopOverviewItem> items,
+    required Rect bounds,
+    required Rect sourceViewport,
+  }) {
+    final useful = items
+        .where((item) => !item.frame.isEmpty)
+        .toList(growable: false);
+    if (useful.isEmpty ||
+        bounds.isEmpty ||
+        sourceViewport.width <= 0.0 ||
+        sourceViewport.height <= 0.0) {
+      return null;
+    }
+    final padding = math.min(
+      outerPadding,
+      math.min(bounds.width, bounds.height) * 0.08,
+    );
+    final available = bounds.deflate(padding);
+    if (available.isEmpty) {
+      return null;
+    }
+    const slotHeightFraction = 0.60;
+    final slotHeight = available.height * slotHeightFraction;
+    final aspect = sourceViewport.width / sourceViewport.height;
+    final slotWidth = slotHeight * aspect;
+    if (!slotHeight.isFinite ||
+        !slotWidth.isFinite ||
+        slotHeight <= 1.0 ||
+        slotWidth <= 1.0) {
+      return null;
+    }
+
+    final ordered = List<DesktopOverviewItem>.of(useful)
+      ..sort((left, right) {
+        final workspaceOrder = left.workspaceId.compareTo(right.workspaceId);
+        if (workspaceOrder != 0) {
+          return workspaceOrder;
+        }
+        final horizontalOrder = left.frame.left.compareTo(right.frame.left);
+        if (horizontalOrder != 0) {
+          return horizontalOrder;
+        }
+        final verticalOrder = left.frame.top.compareTo(right.frame.top);
+        if (verticalOrder != 0) {
+          return verticalOrder;
+        }
+        final zOrder = left.z.compareTo(right.z);
+        return zOrder != 0 ? zOrder : left.objectId.compareTo(right.objectId);
+      });
+
+    final rowWidth =
+        ordered.length * slotWidth + gap * math.max(0, ordered.length - 1);
+    var left = rowWidth <= available.width
+        ? available.left + (available.width - rowWidth) / 2.0
+        : available.left;
+    final top = available.top + (available.height - slotHeight) / 2.0;
+    final scale = slotWidth / sourceViewport.width;
+    final slots = <int, Rect>{};
+    final frames = <int, Rect>{};
+    for (final item in ordered) {
+      final slot = Rect.fromLTWH(left, top, slotWidth, slotHeight);
+      final projected = Rect.fromLTWH(
+        slot.left + (item.frame.left - sourceViewport.left) * scale,
+        slot.top + (item.frame.top - sourceViewport.top) * scale,
+        item.frame.width * scale,
+        item.frame.height * scale,
+      );
+      final visible = projected.intersect(slot);
+      slots[item.objectId] = slot;
+      frames[item.objectId] = visible.isEmpty ? projected : visible;
+      left = slot.right + gap;
+    }
+    return DesktopUniformStripArrangement(slots: slots, frames: frames);
   }
 
   static void _sortSpatially(List<DesktopOverviewItem> items, Rect available) {

@@ -1,4 +1,5 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
+import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
 import 'package:denial_desktop/src/state/reference_shell_profile.dart';
 import 'package:denial_desktop/src/state/reference_shell_presentation.dart';
 
@@ -166,9 +167,11 @@ class DenialShell extends ConsumerWidget {
 
     return ShellRuntimeBindings(
       mobilePresentation: presentationProfile == ReferenceShellProfile.mobile,
-      workArea: presentationProfile == ReferenceShellProfile.desktop
-          ? desktopWorkArea
-          : null,
+      workArea:
+          effectiveProfile == ReferenceShellProfile.mobile ||
+              effectiveProfile == ReferenceShellProfile.gamepad
+          ? null
+          : desktopWorkArea,
       pairingSurfaceBuilder: pairingSurfaceBuilder,
       onLocked: onLocked,
       child: AnimatedShellTheme(
@@ -225,7 +228,10 @@ class _ProfileScene extends StatelessWidget {
           ],
         ),
       ),
-      ReferenceShellProfile.desktop => DesktopInputLayoutPublisher(
+      // The gamepad policy reuses the desktop presentation; the gamepad
+      // scene and its touch chrome are selected by `effectiveProfile` above.
+      ReferenceShellProfile.desktop ||
+      ReferenceShellProfile.gamepad => DesktopInputLayoutPublisher(
         softwareKeyboardEnabled:
             policyProfile == ReferenceShellProfile.mobile ||
             policyProfile == ReferenceShellProfile.gamepad,
@@ -234,7 +240,9 @@ class _ProfileScene extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              ShellSecureStage(
+              _GamepadKeyboardInset(
+                enabled: policyProfile == ReferenceShellProfile.gamepad,
+                child: ShellSecureStage(
                 useConfiguredLockAnimation:
                     policyProfile == ReferenceShellProfile.desktop,
                 scene: Stack(
@@ -256,6 +264,7 @@ class _ProfileScene extends StatelessWidget {
                   ],
                 ),
               ),
+              ),
               if (policyProfile == ReferenceShellProfile.mobile ||
                   policyProfile == ReferenceShellProfile.gamepad)
                 const MobileSystemKeyboardLayer(),
@@ -264,6 +273,38 @@ class _ProfileScene extends StatelessWidget {
         ),
       ),
     };
+  }
+}
+
+/// Reserves the software-keyboard height inside the Flutter scene itself.
+///
+/// The compositor already shrinks the native tile work area, but Flutter-owned
+/// UI (lock screen, launcher search, desktop chrome) lays out in the full
+/// view and would otherwise sit behind the keyboard overlay.
+class _GamepadKeyboardInset extends ConsumerWidget {
+  const _GamepadKeyboardInset({required this.enabled, required this.child});
+
+  final bool enabled;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (!enabled) {
+      return child;
+    }
+    final progress = ref.watch(
+      referenceShellProvider.select((state) => state.edgePanelDragProgress),
+    );
+    final viewSize = MediaQuery.sizeOf(context);
+    final inset =
+        ReferenceShellMetrics.edgePanelHeight(viewSize) *
+        progress.clamp(0.0, 1.0);
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.only(bottom: inset),
+      child: child,
+    );
   }
 }
 

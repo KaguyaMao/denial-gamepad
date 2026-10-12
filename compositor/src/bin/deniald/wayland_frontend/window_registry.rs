@@ -33,10 +33,36 @@ pub(super) struct WindowRecord {
     /// the full work area. Cleared when the tile joins a split.
     #[cfg(feature = "flutter")]
     pub(super) gamepad_single_geometry: Option<Rectangle<i32, Logical>>,
-    /// The lone tile's geometry captured at the start of a resize drag, so an
+    /// A tile's geometry captured at the start of a Gamepad resize drag, so an
     /// eviction can restore the pre-drag size instead of the squeezed sliver.
     #[cfg(feature = "flutter")]
-    pub(super) gamepad_single_snapshot: Option<Option<Rectangle<i32, Logical>>>,
+    pub(super) gamepad_resize_snapshot: Option<Rectangle<i32, Logical>>,
+    /// Secondary Gamepad toplevels remain stacked above a peer instead of
+    /// consuming another Dwindle leaf.
+    #[cfg(feature = "flutter")]
+    pub(super) gamepad_floating_overlay: bool,
+    /// The normal client frame to restore when the auxiliary relation ends.
+    #[cfg(feature = "flutter")]
+    pub(super) gamepad_overlay_restore_geometry: Option<Rectangle<i32, Logical>>,
+    /// The last workspace inherited from a transient parent. This survives a
+    /// short interval where the parent surface exists but has not mapped yet.
+    #[cfg(feature = "flutter")]
+    pub(super) transient_parent_workspace: Option<workspace::WorkspaceLocation>,
+    /// The current XDG parent surface, retained so an orphaned child can be
+    /// re-enrolled when that relationship is removed or replaced.
+    #[cfg(feature = "flutter")]
+    pub(super) transient_parent_surface: Option<ObjectId>,
+    /// The last frame of that parent used to position a Gamepad auxiliary
+    /// while the parent is temporarily not mapped.
+    #[cfg(feature = "flutter")]
+    pub(super) transient_parent_geometry: Option<Rectangle<i32, Logical>>,
+    /// The current X11 transient parent ID, which has no Wayland surface ID.
+    #[cfg(feature = "flutter")]
+    pub(super) transient_parent_protocol_id: Option<u32>,
+    /// A parent surface removed while the child was still mapped must not keep
+    /// the child out of the managed layout indefinitely.
+    #[cfg(feature = "flutter")]
+    pub(super) transient_parent_orphaned: bool,
     #[cfg(feature = "flutter")]
     pub(super) mobile_restore: Option<(WindowGeometryIntent, WindowPlacementState)>,
     pub(super) layout_insertion_anchor: Option<ObjectId>,

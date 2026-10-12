@@ -34,7 +34,7 @@ class AppLaunchRequest {
   final Rect? sourceRect;
 
   bool matchesWindow(DenialWindow window) {
-    if (!window.isUserApp) {
+    if (!window.isPresentedUserApp) {
       return false;
     }
     final target = targetObjectId;

@@ -168,7 +168,7 @@ class DesktopWindowFrame extends ConsumerWidget {
     required this.onOverviewDragCancel,
     this.onOverviewFling,
     this.onOverviewPanStart,
-    this.swipeOverviewUpCloses = false,
+    this.swipeOverviewUpTerminates = false,
     this.heldPets = const <DenialWindow>[],
   });
 
@@ -201,7 +201,8 @@ class DesktopWindowFrame extends ConsumerWidget {
   final VoidCallback onOverviewDragCancel;
   final ValueChanged<double>? onOverviewFling;
   final VoidCallback? onOverviewPanStart;
-  final bool swipeOverviewUpCloses;
+  /// Touch overview: upward swipe on a card terminates its application.
+  final bool swipeOverviewUpTerminates;
 
   /// The pets the window holds (denial-pet-v1), back to front. They are drawn
   /// with the window, inside every transform that moves it.
@@ -257,6 +258,19 @@ class DesktopWindowFrame extends ConsumerWidget {
             livePlacementFrame: placement.frame,
           )
         : this.frame;
+    // The touch overview strip scrolls as a whole. Reading the offset here
+    // keeps a pan cheap and lets the cards follow the finger directly.
+    final overviewScroll = overview
+        ? ref.watch(
+            desktopWorkspaceProvider.select(
+              (state) =>
+                  this.placement.minimized &&
+                      state.overview?.workspaces?.strip == true
+                  ? 0.0
+                  : state.overview?.scrollOffset ?? 0.0,
+            ),
+          )
+        : 0.0;
     final devicePixelRatio =
         outputPixelGrid?.scale ?? MediaQuery.devicePixelRatioOf(context);
     final pixelGridOrigin = outputPixelGrid?.logicalRect.topLeft ?? Offset.zero;
@@ -330,6 +344,7 @@ class DesktopWindowFrame extends ConsumerWidget {
       dragging: placement.dragging,
       resizing: placement.resizing,
       layoutPreviewing: placement.layoutPreviewing,
+      overviewScrollOffset: overviewScroll,
       pixelAlignmentInset: placement.frameBorder,
       pixelGridScale: devicePixelRatio,
       pixelGridOrigin: pixelGridOrigin,
@@ -425,7 +440,7 @@ class DesktopWindowFrame extends ConsumerWidget {
                           onDragUpdate: onOverviewDragUpdate,
                           onDragEnd: onOverviewDragEnd,
                           onDragCancel: onOverviewDragCancel,
-                          swipeUpCloses: swipeOverviewUpCloses,
+                          swipeUpTerminates: swipeOverviewUpTerminates,
                           onFling: onOverviewFling,
                           onPanStart: onOverviewPanStart,
                           child: Builder(
@@ -667,6 +682,7 @@ class DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
     required this.dragging,
     required this.resizing,
     required this.layoutPreviewing,
+    this.overviewScrollOffset = 0.0,
     this.pixelAlignmentInset,
     this.pixelGridScale,
     this.pixelGridOrigin = Offset.zero,
@@ -688,6 +704,9 @@ class DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
   final bool dragging;
   final bool resizing;
   final bool layoutPreviewing;
+
+  /// Shared view offset, independent of each card's entrance/reflow animation.
+  final double overviewScrollOffset;
   final double? pixelAlignmentInset;
   final double? pixelGridScale;
   final Offset pixelGridOrigin;
@@ -709,6 +728,7 @@ class _DesktopAnimatedWindowPositionState
   bool _layoutPreviewExitActive = false;
   bool _resizeJustEnded = false;
   Rect? _dragReleaseAnimationOrigin;
+  Rect? _overviewExitAnimationOrigin;
 
   @override
   void initState() {
@@ -737,6 +757,13 @@ class _DesktopAnimatedWindowPositionState
       _dragReleaseAnimationOrigin = translation == null
           ? null
           : oldWidget.rect.shift(translation);
+    }
+    if (oldWidget.overview && !widget.overview) {
+      // Strip scrolling is a paint-only translation. Keep the old visual
+      // rectangle as the exit origin so closing does not jump to raw frames.
+      _overviewExitAnimationOrigin = oldWidget.rect.shift(
+        Offset(oldWidget.overviewScrollOffset, 0.0),
+      );
     }
     if (oldWidget.layoutPreviewing && !widget.layoutPreviewing) {
       _layoutPreviewExitActive = true;
@@ -826,7 +853,9 @@ class _DesktopAnimatedWindowPositionState
       duration: positionDuration,
       curve: _curve,
       rect: rect,
-      animationOrigin: _dragReleaseAnimationOrigin,
+      paintOffset: Offset(widget.overviewScrollOffset, 0.0),
+      animationOrigin:
+          _overviewExitAnimationOrigin ?? _dragReleaseAnimationOrigin,
       // SUPER+A and SUPER+Tab retain the real window geometry. Their live
       // texture, frame, shadow, and hit-test region move as one composited
       // layer instead of resizing and repainting on every animation tick.
@@ -837,6 +866,7 @@ class _DesktopAnimatedWindowPositionState
         _overviewTransitionActive = false;
         _layoutPreviewExitActive = false;
         _dragReleaseAnimationOrigin = null;
+        _overviewExitAnimationOrigin = null;
         if (completedOverviewEntrance) {
           _overviewTransitionCompleted.value = true;
         }

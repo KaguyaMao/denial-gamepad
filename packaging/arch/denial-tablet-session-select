@@ -3,21 +3,24 @@
 # 对标 steamos-session-select：先写显示管理器下次自动登录的会话，再退出当前
 # 会话，由显示管理器接着自动进入目标会话。
 #
-# 用法: denial-tablet-session-select <denial|gamepad|gamescope|plasma>
+# 用法: denial-tablet-session-select <denial|gamepad|mobile|gamescope|plasma>
 set -e
 
 SET_SESSION="/usr/lib/steamos/steam-set-session"
 POLKIT_AGENT_BIN="${POLKIT_AGENT_BIN:-/usr/lib/polkit-kde-authentication-agent-1}"
 LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/denial-session-select.log"
+SELECTOR_MODE="${1:-<empty>}"
 
 # Launched applications inherit null stdio from the compositor, so without
 # this log a tap that dies mid-script is indistinguishable from a tap that
 # never spawned. Keep it small and best-effort: logging must never break the
 # session switch itself.
-log_step() {
-  local status=$?
+log_record() {
+  local status="$1"
+  shift
   local line
-  line="$(date '+%F %T') [status=$status] $*"
+  line="$(date '+%F %T') [status=$status pid=$$ ppid=$PPID] $*"
+  mkdir -p -- "$(dirname -- "$LOG_FILE")" 2>/dev/null || true
   if [[ -f "$LOG_FILE" ]]; then
     local size
     size="$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)"
@@ -29,6 +32,30 @@ log_step() {
   printf '%s\n' "$line" >>"$LOG_FILE" 2>/dev/null || true
 }
 
+log_step() {
+  local status=$?
+  log_record "$status" "$@"
+}
+
+trap 'status=$?; log_record "$status" "selector exit mode=$SELECTOR_MODE"' EXIT
+
+session_config_path() {
+  local display_manager
+  display_manager="$(systemctl show -p Id --value display-manager 2>/dev/null || true)"
+  case "${display_manager%.service}" in
+    plasmalogin) printf '%s\n' /etc/plasmalogin.conf.d/zz-steamos-autologin.conf ;;
+    sddm) printf '%s\n' /etc/sddm.conf.d/zz-steamos-autologin.conf ;;
+    *) return 1 ;;
+  esac
+}
+
+configured_session() {
+  local config
+  config="$(session_config_path)" || return 1
+  [[ -r "$config" ]] || return 1
+  awk -F= '$1 == "Session" { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$config"
+}
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") <mode>
@@ -36,6 +63,7 @@ Usage: $(basename "$0") <mode>
 Modes:
   denial      进入 Denial 平板桌面（desktop shell）
   gamepad     进入 Denial 手柄桌面（gamepad profile，全屏触摸手势）
+  mobile      进入 Denial Mobile 平板桌面（mobile profile，单应用模式）
   gamescope   返回游戏模式（Steam 游戏会话）
   plasma      进入 Plasma 桌面模式（KDE）
 
@@ -73,7 +101,38 @@ terminate_denial_compositor() {
       return 1
     fi
   done
+  log_step "deniald pid=$pid exited after $((waited * 100))ms"
   return 0
+}
+
+# Finish a Plasma logout that is still holding the VT after the shell has
+# gone. The watcher is outside the graphical session slice so it survives the
+# logout it is supervising. A prompt handoff finds the old session inactive
+# and does nothing.
+nudge_hung_plasma_logout() {
+  local session_id="${XDG_SESSION_ID:-}"
+  [[ -n "$session_id" ]] || return 0
+  command -v systemd-run >/dev/null 2>&1 || return 0
+  local unit="denial-plasma-logout-nudge-${session_id}"
+  systemd-run --user --quiet --collect \
+    --slice=background.slice \
+    --unit="$unit" \
+    --description="Finish a hung Plasma logout for Denial" \
+    /bin/bash -c "
+      session_id='$session_id'
+      sleep 4
+      state=\$(loginctl show-session \"\$session_id\" -p Active --value 2>/dev/null || true)
+      if [[ \"\$state\" != yes ]]; then
+        exit 0
+      fi
+      systemctl --user kill --kill-whom=main --signal=TERM plasma-ksmserver.service || true
+      sleep 2
+      state=\$(loginctl show-session \"\$session_id\" -p Active --value 2>/dev/null || true)
+      if [[ \"\$state\" == yes ]]; then
+        systemctl --user kill --kill-whom=all --signal=KILL plasma-ksmserver.service || true
+      fi
+    " >/dev/null 2>&1 || log_step 'could not schedule Plasma logout nudge'
+  log_step "scheduled Plasma logout nudge for session $session_id"
 }
 
 logout_current() {
@@ -122,9 +181,14 @@ logout_current() {
     systemctl --user stop gamescope-session.target
     return 0
   fi
-  # Plasma 桌面：走 KDE 注销（和 steamos-session-select gamescope 同一路）
+  # Plasma 桌面：走 KDE 注销（和 steamos-session-select gamescope 同一路）。
+  # A normal logout can keep kwin on a black VT for the session-save timeout
+  # after plasmashell is already gone. Bound that wait without terminating the
+  # login session directly: loginctl terminate-session races plasmalogin and
+  # leaves the next session with only a cursor.
   if command -v qdbus6 >/dev/null 2>&1 && qdbus6 org.kde.Shutdown /Shutdown >/dev/null 2>&1; then
     log_step 'logout branch: plasma qdbus logout'
+    nudge_hung_plasma_logout
     qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout
     return 0
   fi
@@ -198,6 +262,18 @@ ensure_polkit_agent() {
 set_session() {
   if pkexec "$SET_SESSION" "$1"; then
     log_step "set_session ok: $1"
+    local display_manager config actual_session
+    display_manager="$(systemctl show -p Id --value display-manager 2>/dev/null || echo unknown)"
+    config="$(session_config_path 2>/dev/null || echo unknown)"
+    actual_session="$(configured_session 2>/dev/null || echo unavailable)"
+    log_step "session handoff verification target=$1 actual=$actual_session display_manager=$display_manager config=$config"
+    if [[ "$actual_session" != "$1" ]]; then
+      log_record 1 "refusing logout because display-manager session verification failed"
+      notify_fail \
+        '会话切换失败' \
+        "显示管理器的下次会话不是 $1（当前为 $actual_session），已取消注销。"
+      exit 1
+    fi
     return 0
   fi
   log_step "set_session FAILED: $1"
@@ -207,7 +283,7 @@ set_session() {
   exit 1
 }
 
-log_step "start mode=${1:-<empty>} desktop=${XDG_CURRENT_DESKTOP:-unset}"
+log_step "start mode=${1:-<empty>} desktop=${XDG_CURRENT_DESKTOP:-unset} session_desktop=${XDG_SESSION_DESKTOP:-unset} session_id=${XDG_SESSION_ID:-unset} wayland=${WAYLAND_DISPLAY:-unset} display_manager=$(systemctl show -p Id --value display-manager 2>/dev/null || echo unknown)"
 ensure_polkit_agent
 
 # In a Denial session there is no KDE shutdown service and Steam is not the
@@ -239,6 +315,12 @@ case "${1:-}" in
     [[ "$gamepad_session" =~ ^[A-Za-z0-9._-]+\.desktop$ ]] \
       || { printf '%s: invalid gamepad session id: %s\n' "$(basename "$0")" "$gamepad_session" >&2; exit 1; }
     set_session "$gamepad_session"
+    logout_current;;
+  mobile)
+    mobile_session="${2:-denial-mobile.desktop}"
+    [[ "$mobile_session" =~ ^[A-Za-z0-9._-]+\.desktop$ ]] \
+      || { printf '%s: invalid mobile session id: %s\n' "$(basename "$0")" "$mobile_session" >&2; exit 1; }
+    set_session "$mobile_session"
     logout_current;;
   gamescope)
     if ! in_denial && command -v steamos-session-select >/dev/null 2>&1; then

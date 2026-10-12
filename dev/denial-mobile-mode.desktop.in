@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=进入 Denial 移动桌面
+Name[en]=Enter Denial Mobile
+Comment=切换到 Denial Mobile 平板桌面（单应用 mobile profile）
+Comment[en]=Switch to the Denial Mobile single-app tablet profile
+Exec=@MOBILE_SESSION_SELECT@ mobile @MOBILE_SESSION_ID@
+TryExec=@MOBILE_SESSION_SELECT@
+Icon=/usr/share/icons/hicolor/256x256/apps/kaguyaos.png
+Terminal=false
+Type=Application
+Categories=System;
+Keywords=denial;mobile;tablet;gesture;compositor;
+OnlyShowIn=KDE;
+StartupNotify=false

@@ -15,7 +15,7 @@ final class ShellWindowIndex {
       byObjectId[window.objectId] = window;
       // Preserve the first-match semantics of the previous native-ID scan.
       byWindowId.putIfAbsent(window.windowId, () => window);
-      if (window.isUserApp) {
+      if (window.isPresentedUserApp) {
         appIndices[window.objectId] = apps.length;
         apps.add(window);
       }
@@ -45,7 +45,12 @@ final class ShellWindowIndex {
     for (final window in apps) window.objectId: window,
   });
   late final List<DenialWindow> positionedPopupSurfaces = List.unmodifiable(
-    windows.where((window) => window.isPopupSurface && window.geometry != null),
+    windows.where(
+      (window) =>
+          !window.hiddenByTransientParent &&
+          window.isPopupSurface &&
+          window.geometry != null,
+    ),
   );
   // These maps are created internally and never exposed or mutated.
   final Map<int, DenialWindow> _byObjectId;

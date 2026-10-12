@@ -47,7 +47,7 @@ List<Widget> buildDesktopWindowLayers({
   required ValueChanged<DenialWindow> onCancelOverviewDrag,
   Map<int, Rect> overviewEntryFrames = const <int, Rect>{},
   Map<int, Rect> overviewDepartingFrames = const <int, Rect>{},
-  bool swipeOverviewUpCloses = false,
+  bool swipeOverviewUpTerminates = false,
   ValueChanged<double>? onOverviewFling,
   VoidCallback? onOverviewPanStart,
   Map<int, List<DenialWindow>> heldLayers = const <int, List<DenialWindow>>{},
@@ -201,14 +201,16 @@ List<Widget> buildDesktopWindowLayers({
         selected: selected,
         windowRevealRegistry: windowRevealRegistry,
         onOverviewTap: () => onActivateWindow(window),
-        onOverviewClose: () => (swipeOverviewUpCloses
+        // On the touch profile, an upward swipe terminates the selected app
+        // and any peers in its native split layout.
+        onOverviewClose: () => (swipeOverviewUpTerminates
             ? onTerminateOverviewGroup
             : onCloseWindow)(window),
         onOverviewDragStart: () => onBeginOverviewDrag(window),
         onOverviewDragUpdate: (delta) => onUpdateOverviewDrag(window, delta),
         onOverviewDragEnd: () => onEndOverviewDrag(window),
         onOverviewDragCancel: () => onCancelOverviewDrag(window),
-        swipeOverviewUpCloses: swipeOverviewUpCloses,
+        swipeOverviewUpTerminates: swipeOverviewUpTerminates,
         onOverviewFling: onOverviewFling,
         onOverviewPanStart: onOverviewPanStart,
         heldPets: held,
@@ -225,6 +227,10 @@ List<Widget> buildDesktopWindowLayers({
           offscreenMinimized: minimizingForeground || offscreenMinimized,
           overviewActive: desktop.overviewActive,
           overview: overview,
+          overviewScrollOffset:
+              overview && desktop.overview?.workspaces?.strip == true
+              ? desktop.overview?.scrollOffset ?? 0.0
+              : 0.0,
           switching: switching,
           motionDuration: motionDuration,
         ),

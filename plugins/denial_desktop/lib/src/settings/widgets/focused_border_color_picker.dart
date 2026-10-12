@@ -293,7 +293,7 @@ class _PickerButton extends StatelessWidget {
         ? FilledButton(
             onPressed: onPressed,
             style: FilledButton.styleFrom(
-              minimumSize: const Size(44, 44),
+              minimumSize: const Size(48, 48),
               shape: shape,
             ),
             child: Text(label),
@@ -301,7 +301,7 @@ class _PickerButton extends StatelessWidget {
         : TextButton(
             onPressed: onPressed,
             style: TextButton.styleFrom(
-              minimumSize: const Size(44, 44),
+              minimumSize: const Size(48, 48),
               shape: shape,
             ),
             child: Text(label),
@@ -325,7 +325,7 @@ class _PickerIconButton extends StatelessWidget {
     onPressed: onPressed,
     icon: Icon(icon, size: 18),
     style: IconButton.styleFrom(
-      minimumSize: const Size(44, 44),
+      minimumSize: const Size(48, 48),
       shape: RoundedRectangleBorder(
         borderRadius: DenialSurfaceGeometry.borderRadiusOf(context),
       ),

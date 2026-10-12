@@ -46,6 +46,10 @@ class ReferenceInputLayoutCoordinator {
           scrollStripVisible: state.edgePanelVisible,
         );
     if (state.lockLayerVisible) {
+      // Keep publishing the OSK hit region while the secure surface owns the
+      // rest of input. Mobile lock authentication fields open the same shell
+      // keyboard as app fields; suppressing these regions here makes the keys
+      // visible but untouchable at the login screen.
       final lockBackgroundWindow = state.primaryWindow;
       _publishInputLayout(
         viewSize: viewSize,

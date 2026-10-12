@@ -11,7 +11,11 @@ class DesktopSceneWindows {
     List<DenialWindow> windows,
     Set<int> livePlacementObjectIds,
   ) : windows = List<DenialWindow>.unmodifiable(
-        windows.where((window) => window.isUserApp || window.isPopupSurface),
+        windows.where(
+          (window) =>
+              window.isPresentedUserApp ||
+              (window.isPopupSurface && !window.hiddenByTransientParent),
+        ),
       ),
       livePlacementObjectIds = Set.unmodifiable(livePlacementObjectIds);
 

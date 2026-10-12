@@ -23,8 +23,8 @@ final class TopBarPlugin implements ShellSurface {
   @override
   ShellSurfacePlacement? place(ShellSurfaceEnvironment environment) {
     final layout = environment.settings.layout;
-    // The touch profile always keeps a fixed top Dock, independent of the
-    // stored desktop bar settings.
+    // The touch Dock is a transient overlay, independent of the stored desktop
+    // bar settings. Its hidden edge handle stays mounted for pull-down input.
     if (environment.gamepad) {
       return ShellSurfacePlacement(
         bounds: ShellSurfacePlacement.edgeBounds(
@@ -32,6 +32,7 @@ final class TopBarPlugin implements ShellSurface {
           PanelEdge.top,
           denialTouchSystemBarThickness,
         ),
+        layer: ShellSurfaceLayer.aboveWindows,
         visible: !environment.locked && !environment.wallpaperSelectorVisible,
       );
     }

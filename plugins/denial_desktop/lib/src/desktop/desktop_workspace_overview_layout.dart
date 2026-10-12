@@ -137,9 +137,9 @@ class DesktopWorkspaceOverviewArrangement {
 /// Managed layouts carry meaning in their geometry, so this overview never
 /// re-packs windows. Each card is a uniformly scaled copy of its workspace,
 /// including scrolling columns outside the visible viewport. Cards fill the
-/// largest grid that keeps one common scale; the configured switching
-/// orientation chooses whether workspaces read across rows or down columns.
-/// Minimized windows belong to no workspace and sit on a shelf below.
+/// largest grid that keeps one common scale, except for the touch profile's
+/// single horizontal strip. Minimized windows belong to no workspace and sit
+/// on a shelf below.
 abstract final class DesktopWorkspaceOverviewLayout {
   static const double maximumScale = 0.55;
   static const double cardInset = 8.0;
@@ -153,6 +153,7 @@ abstract final class DesktopWorkspaceOverviewLayout {
     required int workspaceCount,
     required WorkspaceSwitchingOrientation orientation,
     required List<DesktopWorkspaceOverviewItem> items,
+    bool strip = false,
     ({int workspaceId, Rect frame})? landing,
   }) {
     if (bounds.isEmpty || viewport.isEmpty) {
@@ -222,6 +223,21 @@ abstract final class DesktopWorkspaceOverviewLayout {
     final sourceHeight = sources.values
         .map((rect) => rect.height)
         .reduce(math.max);
+    if (strip) {
+      return _arrangeStrip(
+        area: area,
+        viewport: viewport,
+        count: count,
+        sources: sources,
+        sourceWidth: sourceWidth,
+        sourceHeight: sourceHeight,
+        items: items,
+        shelf: shelf,
+        frames: frames,
+        landing: landing,
+        gap: gap,
+      );
+    }
     final label = count > 1 ? labelExtent : 0.0;
     final grid = _bestGrid(
       count: count,
@@ -289,6 +305,92 @@ abstract final class DesktopWorkspaceOverviewLayout {
           ),
         ),
       );
+    }
+
+    final cardsByWorkspace = <int, DesktopWorkspaceOverviewCard>{
+      for (final card in cards) card.workspaceId: card,
+    };
+    for (final item in items) {
+      if (item.minimized) {
+        continue;
+      }
+      final card = cardsByWorkspace[item.workspaceId];
+      if (card != null) {
+        frames[item.objectId] = card.project(item.frame);
+      }
+    }
+    return DesktopWorkspaceOverviewArrangement(
+      cards: List<DesktopWorkspaceOverviewCard>.unmodifiable(cards),
+      shelf: shelf,
+      frames: frames,
+      landing: landing == null
+          ? null
+          : cardsByWorkspace[landing.workspaceId]?.project(landing.frame),
+    );
+  }
+
+  /// Places workspace snapshots in one row while keeping one common scale.
+  ///
+  /// A workspace card is a projection of the compositor's layout tree, not a
+  /// newly packed collection of application previews. Sharing the scale and
+  /// source extent across the row preserves split proportions and makes the
+  /// row scroll when all workspaces cannot fit in the viewport.
+  static DesktopWorkspaceOverviewArrangement _arrangeStrip({
+    required Rect area,
+    required Rect viewport,
+    required int count,
+    required Map<int, Rect> sources,
+    required double sourceWidth,
+    required double sourceHeight,
+    required List<DesktopWorkspaceOverviewItem> items,
+    required Rect shelf,
+    required Map<int, Rect> frames,
+    required ({int workspaceId, Rect frame})? landing,
+    required double gap,
+  }) {
+    final label = count > 1 ? labelExtent : 0.0;
+    final contentHeight = area.height - label - cardInset * 2.0;
+    final scale = math.min(maximumScale, contentHeight / sourceHeight);
+    if (!scale.isFinite || scale <= 0.0) {
+      return DesktopWorkspaceOverviewArrangement(
+        cards: const <DesktopWorkspaceOverviewCard>[],
+        shelf: shelf,
+        frames: frames,
+      );
+    }
+
+    final cardWidth = sourceWidth * scale + cardInset * 2.0;
+    final cardHeight = sourceHeight * scale + cardInset * 2.0;
+    final rowWidth = count * cardWidth + math.max(0, count - 1) * gap;
+    var left = rowWidth <= area.width
+        ? area.left + (area.width - rowWidth) / 2.0
+        : area.left;
+    final top = area.top + label;
+    final cards = <DesktopWorkspaceOverviewCard>[];
+    for (var index = 0; index < count; index += 1) {
+      final workspaceId = index + 1;
+      final rect = Rect.fromLTWH(left, top, cardWidth, cardHeight);
+      final source = sources[workspaceId]!;
+      final contentRect = Rect.fromCenter(
+        center: rect.center,
+        width: source.width * scale,
+        height: source.height * scale,
+      );
+      cards.add(
+        DesktopWorkspaceOverviewCard(
+          workspaceId: workspaceId,
+          rect: rect,
+          contentRect: contentRect,
+          sourceRect: source,
+          viewportRect: Rect.fromLTWH(
+            contentRect.left + (viewport.left - source.left) * scale,
+            contentRect.top + (viewport.top - source.top) * scale,
+            viewport.width * scale,
+            viewport.height * scale,
+          ),
+        ),
+      );
+      left += cardWidth + gap;
     }
 
     final cardsByWorkspace = <int, DesktopWorkspaceOverviewCard>{

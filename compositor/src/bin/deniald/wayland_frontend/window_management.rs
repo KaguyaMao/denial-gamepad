@@ -243,11 +243,21 @@ pub(super) fn activate_window(
             resumed = frontend
                 .window_root_surface(window)
                 .is_some_and(|surface| frontend.set_surface_minimized(surface.id(), false));
-            if resumed && let Some(managed) = ManagedWindow::new(window) {
-                managed.prepare_minimized(false);
-            }
             if resumed {
-                frontend.reconcile_window_layout(window);
+                if frontend.gamepad_shell() {
+                    frontend.reconcile_window_layout(window);
+                    if let Some(managed) = ManagedWindow::new(window) {
+                        // Configure the retained split before clearing the
+                        // client's suspended state, so it never reappears at
+                        // the squeezed size.
+                        managed.prepare_minimized(false);
+                    }
+                } else {
+                    if let Some(managed) = ManagedWindow::new(window) {
+                        managed.prepare_minimized(false);
+                    }
+                    frontend.reconcile_window_layout(window);
+                }
             }
         }
         #[cfg(not(feature = "flutter"))]
@@ -603,7 +613,9 @@ fn x11_overview_app_pid(_window: &Window) -> Option<u32> {
 fn terminate_overview_group(state: &mut RuntimeState, window_id: u64) {
     use std::os::fd::AsRawFd;
 
-    let Some(frontend) = state.wayland.as_mut() else { return };
+    let Some(frontend) = state.wayland.as_mut() else {
+        return;
+    };
     if !frontend.gamepad_shell {
         warn!(window_id, "overview process termination is gamepad-only");
         return;
@@ -615,7 +627,9 @@ fn terminate_overview_group(state: &mut RuntimeState, window_id: u64) {
         }
         return;
     }
-    let Some(window) = frontend.window_for_id(window_id) else { return };
+    let Some(window) = frontend.window_for_id(window_id) else {
+        return;
+    };
     let peers = frontend.layout_window_geometries(&window);
     let windows = if peers.is_empty() {
         vec![window]
@@ -657,31 +671,54 @@ fn terminate_overview_group(state: &mut RuntimeState, window_id: u64) {
                     continue;
                 }
             }
-            warn!(window_id, "no distinct x11 application pid; requesting window close instead");
+            warn!(
+                window_id,
+                "no distinct x11 application pid; requesting window close instead"
+            );
             close_window(&window);
             continue;
         }
-        let client = frontend.window_root_surface(&window).and_then(|root| root.client());
-        let identity = client.as_ref().and_then(|client| client.get_data::<super::handlers::DenialClientState>());
+        let client = frontend
+            .window_root_surface(&window)
+            .and_then(|root| root.client());
+        let identity = client
+            .as_ref()
+            .and_then(|client| client.get_data::<super::handlers::DenialClientState>());
         if let Some(identity) = identity {
             let allowed = identity.peer_uid == Some(unsafe { libc::geteuid() })
-                && identity.peer_pid.is_some_and(|pid| pid > 1 && pid as u32 != std::process::id());
+                && identity
+                    .peer_pid
+                    .is_some_and(|pid| pid > 1 && pid as u32 != std::process::id());
             if allowed {
-                if let (Some(pid), Some(pidfd)) = (identity.peer_pid, identity.peer_pidfd.as_ref()) {
-                    if !signalled.insert(pid) { continue; }
+                if let (Some(pid), Some(pidfd)) = (identity.peer_pid, identity.peer_pidfd.as_ref())
+                {
+                    if !signalled.insert(pid) {
+                        continue;
+                    }
                     // SAFETY: pidfd is owned by this live Wayland connection;
                     // SIGKILL targets only its authenticated peer process.
                     let status = unsafe {
-                        libc::syscall(libc::SYS_pidfd_send_signal, pidfd.as_raw_fd(), libc::SIGKILL, std::ptr::null::<libc::siginfo_t>(), 0)
+                        libc::syscall(
+                            libc::SYS_pidfd_send_signal,
+                            pidfd.as_raw_fd(),
+                            libc::SIGKILL,
+                            std::ptr::null::<libc::siginfo_t>(),
+                            0,
+                        )
                     };
-                    if status == 0 { continue; }
+                    if status == 0 {
+                        continue;
+                    }
                     warn!(pid, error = %std::io::Error::last_os_error(), "could not terminate overview application");
                 }
             }
         }
         // X11's root belongs to shared Xwayland, and _NET_WM_PID is untrusted.
         // Do not kill Xwayland or guess a process ID from application metadata.
-        warn!(window_id, "no authenticated process handle; requesting window close instead");
+        warn!(
+            window_id,
+            "no authenticated process handle; requesting window close instead"
+        );
         close_window(&window);
     }
 }
@@ -1018,6 +1055,9 @@ pub(super) fn move_window_to_workspace(
         let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
         let location = frontend.move_window_to_workspace(window_id, requested_output, workspace_id);
         if let Some(location) = location {
+            if let Some(window) = frontend.window_for_id(window_id) {
+                frontend.sync_transient_family_workspace(&window, location);
+            }
             if let Some(destination) = requested_output {
                 move_window_geometry_to_output(frontend, window_id, destination);
             }
@@ -1278,8 +1318,16 @@ fn restore_minimized_window_for_move(state: &mut RuntimeState, window_id: u64) {
     if !frontend.set_surface_minimized(root.id(), false) {
         return;
     }
-    if let Some(managed) = ManagedWindow::new(&window) {
-        managed.prepare_minimized(false);
+    if frontend.gamepad_shell() {
+        frontend.reconcile_window_layout(&window);
+        if let Some(managed) = ManagedWindow::new(&window) {
+            managed.prepare_minimized(false);
+        }
+    } else {
+        if let Some(managed) = ManagedWindow::new(&window) {
+            managed.prepare_minimized(false);
+        }
+        frontend.reconcile_window_layout(&window);
     }
     state
         .pending_window_events
@@ -1977,6 +2025,32 @@ pub(crate) fn minimize_toplevel_by_id(state: &mut RuntimeState, window_id: u64) 
         return false;
     };
     minimize_window(state, &window)
+}
+
+/// Publishes the pre-drag rectangle of a tile that an edge drag just
+/// backgrounded. This must follow any squeezed `Update` in the same dispatch
+/// so Flutter commits the original size before the next scene snapshot.
+#[cfg(feature = "flutter")]
+pub(crate) fn publish_gamepad_backgrounded_geometry(state: &mut RuntimeState, window_id: u64) {
+    let Some(window) = state
+        .wayland
+        .as_ref()
+        .and_then(|frontend| frontend.window_for_id(window_id))
+    else {
+        return;
+    };
+    let geometry = state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .window_geometry_target(&window);
+    queue_transient_window_placement(
+        state,
+        &window,
+        geometry,
+        WindowPlacementPhase::End,
+        WindowPlacementChange::Resize,
+    );
 }
 
 #[cfg(feature = "flutter")]
@@ -3039,13 +3113,13 @@ pub(super) fn apply_managed_minimize(
     else {
         return false;
     };
-    managed.prepare_minimized(minimized);
-    state
-        .wayland
-        .as_mut()
-        .expect("missing Wayland frontend")
-        .set_surface_minimized(root.id(), minimized);
     if minimized {
+        managed.prepare_minimized(true);
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .set_surface_minimized(root.id(), true);
         state
             .wayland
             .as_mut()
@@ -3054,11 +3128,18 @@ pub(super) fn apply_managed_minimize(
         release_window_focus(state, window);
         queue_window_action_for_window(state, window, WindowAction::Minimize);
     } else {
-        state
-            .wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .reconcile_window_layout(window);
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        frontend.set_surface_minimized(root.id(), false);
+        if frontend.gamepad_shell() {
+            // Recreate the retained Dwindle slot and send its saved size before
+            // clearing the client's suspended state, so the first visible
+            // configure is already the restored tile geometry.
+            frontend.reconcile_window_layout(window);
+            managed.prepare_minimized(false);
+        } else {
+            managed.prepare_minimized(false);
+            frontend.reconcile_window_layout(window);
+        }
         queue_window_action_for_window(state, window, WindowAction::Restore);
     }
     state.scene_sync.mark_dirty();

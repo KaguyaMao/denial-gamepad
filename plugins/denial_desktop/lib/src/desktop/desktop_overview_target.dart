@@ -34,6 +34,7 @@ class DesktopOverviewTarget {
     required int? foregroundObjectId,
     required int? preferredMonitorId,
     bool allWorkspaces = false,
+    bool includeSmallPreviews = false,
   }) {
     final canvas = Offset.zero & viewSize;
     if (canvas.isEmpty || (workspace.placements.isEmpty && !allWorkspaces)) {
@@ -41,7 +42,8 @@ class DesktopOverviewTarget {
     }
 
     final windowsById = <int, DenialWindow>{
-      for (final window in windows) window.objectId: window,
+      for (final window in windows)
+        if (window.isPresentedUserApp) window.objectId: window,
     };
     final foreground = windowsById[foregroundObjectId];
     final topmost = workspace.placements.values.fold<DesktopWindowPlacement?>(
@@ -82,7 +84,12 @@ class DesktopOverviewTarget {
       if (window == null) {
         continue;
       }
-      if (!DesktopOverviewLayout.isUsefulPreview(placement.frame)) {
+      // Gamepad can minimize a tile as its resize drag squeezes it out. Keep
+      // that background app in the strip even though its live tile is tiny;
+      // the strip gives every card a useful preview frame of its own.
+      if (!placement.minimized &&
+          !includeSmallPreviews &&
+          !DesktopOverviewLayout.isUsefulPreview(placement.frame)) {
         continue;
       }
       if (!allWorkspaces &&

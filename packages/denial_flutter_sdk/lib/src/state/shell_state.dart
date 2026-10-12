@@ -74,7 +74,7 @@ class ShellState {
 
   DenialWindow? get foregroundWindow {
     final window = windowByObjectId(foregroundObjectId);
-    return window != null && window.isUserApp ? window : null;
+    return window != null && window.isPresentedUserApp ? window : null;
   }
 
   DenialWindow? get primaryWindow => foregroundWindow;

@@ -206,7 +206,8 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     final shell = ref.read(referenceShellProvider);
     final workspace = ref.read(desktopWorkspaceProvider);
     final windowsById = <int, DenialWindow>{
-      for (final window in shell.openAppWindows) window.objectId: window,
+      for (final window in shell.openAppWindows)
+        if (window.isPresentedUserApp) window.objectId: window,
     };
     final controller = ref.read(desktopWindowSwitcherProvider.notifier);
     final previous = ref.read(desktopWindowSwitcherProvider);
@@ -407,9 +408,9 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     final shellState = ref.read(referenceShellProvider);
     final layout = ref.read(shellSettingsProvider).layout;
     // Stacking windows overlap, so spreading them apart is the useful view.
-    // Managed layouts already avoid overlap and their arrangement is the
-    // information, so they show true-to-layout workspace miniatures instead.
-    // The touch profile instead shows a horizontally scrolling window strip.
+    // Pointer-managed layouts show one work-area miniature per workspace.
+    // Gamepad keeps the application strip: equal cards, each window drawn at
+    // its real size inside the slot.
     final gamepad =
         ref.read(referenceShellProfileProvider) ==
         ReferenceShellProfile.gamepad;
@@ -422,7 +423,8 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       workspace: workspaceState,
       foregroundObjectId: shellState.foregroundObjectId,
       preferredMonitorId: preferredMonitorId,
-      allWorkspaces: workspaceOverview,
+      allWorkspaces: workspaceOverview || gamepad,
+      includeSmallPreviews: gamepad,
     );
     if (target == null) {
       return;
@@ -437,6 +439,19 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
         backgroundBounds: target.backgroundBounds,
         viewport: target.workArea,
         orientation: layout.workspaceSwitchingOrientation,
+        stripOverview: false,
+        selectedObjectId: shellState.foregroundObjectId,
+      );
+      return;
+    }
+    if (gamepad) {
+      _cancelPendingWorkspaceRequest();
+      workspace.openApplicationStripOverview(
+        monitorId: target.monitorId,
+        bounds: target.bounds,
+        backgroundBounds: target.backgroundBounds,
+        sourceViewport: target.workArea,
+        objectIds: target.objectIds,
         selectedObjectId: shellState.foregroundObjectId,
       );
       return;
@@ -535,7 +550,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     final objectId = request.objectId;
     if (objectId != null) {
       for (final window in ref.read(referenceShellProvider).openAppWindows) {
-        if (window.objectId == objectId) {
+        if (window.objectId == objectId && window.isPresentedUserApp) {
           _activateWindow(window);
           return;
         }
@@ -615,8 +630,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     showPowerSessionSurface(ref);
   }
 
-  /// Overview dismissal is process termination, distinct from the desktop's
-  /// upward background gesture. Native layout ownership resolves split peers.
+  /// Touch overview dismissal terminates the selected app and its split peers.
   void _terminateOverviewGroup(DenialWindow window) {
     ref.read(denialBridgeProvider).terminateOverviewGroup(window);
   }
@@ -730,7 +744,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     }
     final windowsById = <int, DenialWindow>{
       for (final window in ref.read(referenceShellProvider).openAppWindows)
-        window.objectId: window,
+        if (window.isPresentedUserApp) window.objectId: window,
     };
     // Tapping a presented window activates it; tapping anywhere else in the
     // overview exits it.
@@ -860,11 +874,16 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     final workspace = ref.read(desktopWorkspaceProvider);
     final overview = workspace.overview;
     final preview = overview?.frames[window.objectId];
+    final placement = workspace.placements[window.objectId];
+    final visualPreview = overview == null || placement == null
+        ? null
+        : workspace.visualFrame(placement);
     if (overview == null ||
         overview.workspaces == null ||
         preview == null ||
-        !workspace.placements.containsKey(window.objectId) ||
-        !overview.backgroundBounds.contains(preview.center)) {
+        placement == null ||
+        visualPreview == null ||
+        !overview.backgroundBounds.contains(visualPreview.center)) {
       _endOverviewDropPreview();
       return false;
     }

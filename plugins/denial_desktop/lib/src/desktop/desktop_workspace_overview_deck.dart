@@ -19,10 +19,16 @@ class DesktopWorkspaceOverviewDeck extends StatefulWidget {
     super.key,
     required this.desktop,
     required this.onSelectWorkspace,
+    this.onPanStart,
+    this.onPanUpdate,
+    this.onPanFling,
   });
 
   final DesktopWorkspaceState desktop;
   final void Function(int monitorId, int workspaceId) onSelectWorkspace;
+  final VoidCallback? onPanStart;
+  final ValueChanged<Offset>? onPanUpdate;
+  final ValueChanged<double>? onPanFling;
 
   @override
   State<DesktopWorkspaceOverviewDeck> createState() =>
@@ -127,6 +133,8 @@ class _DesktopWorkspaceOverviewDeckState
       overview.monitorId,
     );
     final origin = overview.backgroundBounds.topLeft;
+    final scrollOffset = workspaces.strip ? overview.scrollOffset : 0.0;
+    final scroll = Offset(scrollOffset, 0.0);
     final scrim = context.shellColors.overviewScrim;
     return IgnorePointer(
       ignoring: !interactive,
@@ -136,7 +144,7 @@ class _DesktopWorkspaceOverviewDeckState
           final t = _progress.value.clamp(0.0, 1.0).toDouble();
           Rect place(Rect rect) => Rect.lerp(
             workspaces.cameraRect(rect, _cameraWorkspace),
-            rect,
+            rect.shift(scroll),
             t,
           )!.shift(-origin);
           return Stack(
@@ -174,6 +182,9 @@ class _DesktopWorkspaceOverviewDeckState
                             labelled: workspaces.cards.length > 1,
                             progress: t,
                             monitorId: overview.monitorId,
+                            onPanStart: widget.onPanStart,
+                            onPanUpdate: widget.onPanUpdate,
+                            onPanFling: widget.onPanFling,
                           ),
                         ),
                       if (!workspaces.shelf.isEmpty)
@@ -243,6 +254,9 @@ class _DesktopWorkspaceOverviewDeckState
     required bool labelled,
     required double progress,
     required int monitorId,
+    required VoidCallback? onPanStart,
+    required ValueChanged<Offset>? onPanUpdate,
+    required ValueChanged<double>? onPanFling,
   }) {
     final theme = context.shellTheme;
     final colors = context.shellColors;
@@ -295,6 +309,9 @@ class _DesktopWorkspaceOverviewDeckState
               card.workspaceId,
             ),
             onTap: () => widget.onSelectWorkspace(monitorId, card.workspaceId),
+            onPanStart: onPanStart,
+            onPanUpdate: onPanUpdate,
+            onPanFling: onPanFling,
           ),
         ),
       ],
@@ -437,6 +454,9 @@ class _WorkspaceOverviewCardSurface extends StatefulWidget {
     required this.viewportRadius,
     required this.semanticLabel,
     required this.onTap,
+    this.onPanStart,
+    this.onPanUpdate,
+    this.onPanFling,
   });
 
   final int workspaceId;
@@ -452,6 +472,9 @@ class _WorkspaceOverviewCardSurface extends StatefulWidget {
   final double viewportRadius;
   final String semanticLabel;
   final VoidCallback onTap;
+  final VoidCallback? onPanStart;
+  final ValueChanged<Offset>? onPanUpdate;
+  final ValueChanged<double>? onPanFling;
 
   @override
   State<_WorkspaceOverviewCardSurface> createState() =>
@@ -487,6 +510,16 @@ class _WorkspaceOverviewCardSurfaceState
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: widget.onTap,
+          onPanStart: widget.onPanStart == null
+              ? null
+              : (_) => widget.onPanStart!(),
+          onPanUpdate: widget.onPanUpdate == null
+              ? null
+              : (details) => widget.onPanUpdate!(details.delta),
+          onPanEnd: widget.onPanFling == null
+              ? null
+              : (details) =>
+                    widget.onPanFling!(details.velocity.pixelsPerSecond.dx),
           // Hover and selection ease as before; the fade is applied after
           // that tween so it follows the zoom without lagging behind it.
           child: TweenAnimationBuilder<Decoration>(

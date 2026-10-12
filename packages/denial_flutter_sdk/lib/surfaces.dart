@@ -131,6 +131,7 @@ final class ShellSurfaceEnvironment {
 final class ShellSurfacePlacement {
   const ShellSurfacePlacement({
     required this.bounds,
+    this.layer,
     this.visible = true,
     this.occupiesDesktop = false,
     this.fade = ShellSurfaceFade.automatic,
@@ -138,6 +139,10 @@ final class ShellSurfacePlacement {
 
   /// Logical coordinates in the global Flutter scene, clipped to this output.
   final Rect bounds;
+
+  /// Optional environment-specific scene plane. When null, the surface's
+  /// declared [ShellSurface.layer] is used.
+  final ShellSurfaceLayer? layer;
 
   /// False retains widget state while fading out and suppressing input.
   final bool visible;
@@ -224,7 +229,7 @@ abstract interface class ShellSurface {
   /// Unique, package-qualified identity. Keep it stable for the widget lifetime.
   String get id;
 
-  /// Stable scene plane. Runtime state belongs in placement, not in this getter.
+  /// Default scene plane. A placement may choose an environment-specific plane.
   ShellSurfaceLayer get layer;
 
   /// A pure function of the current environment.

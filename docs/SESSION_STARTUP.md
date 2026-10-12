@@ -19,7 +19,10 @@ every initial output has accepted a real atomic commit, Denial also publishes
 the environment to an available systemd user manager and starts its packaged
 `denial-session.target`. That target binds to the standard
 `graphical-session.target`, allowing portals and other desktop services to
-start against the discovered sockets. It pulls in and waits for
+start against the discovered sockets. It also starts
+`xdg-desktop-portal-wlr.service` after the graphical target is active, so the
+ScreenCast backend is already discoverable when applications such as OBS query
+its available source types. It pulls in and waits for
 `graphical-session-pre.target` before the graphical session starts, then
 starts systemd's
 `xdg-desktop-autostart.target`, so the user manager launches the effective
@@ -28,6 +31,12 @@ every directory in `$XDG_CONFIG_DIRS` only after Denial is ready. Entries can
 target Denial with `OnlyShowIn=Denial;`. Denial stops the graphical-session
 target on shutdown, and the launcher provides a cleanup fallback after the
 compositor process exits.
+
+For portal backend matching, the activation environment uses
+`XDG_CURRENT_DESKTOP=Denial:wlroots`: Denial-specific portal routing is tried
+first, while xdg-desktop-portal-wlr's compatibility `UseIn=wlroots` metadata
+also matches. Applications launched by the shell continue to receive the
+single desktop name `Denial`.
 
 The D-Bus-activated `denial-portal.service` is part of that target. It connects
 to deniald's private appearance-state socket before owning the Settings portal

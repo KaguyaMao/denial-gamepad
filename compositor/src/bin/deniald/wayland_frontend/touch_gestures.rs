@@ -1558,6 +1558,141 @@ fn layout_pinch_delta(
     }
 }
 
+/// Hit-test both sides of a real tile border, including the margin exposed
+/// between the window and the work-area edge. Returns `None` when the contact
+/// is inside the window body (a client tap) rather than on a border band.
+pub(super) fn gamepad_resize_edges(
+    position: Point<f64, Logical>,
+    geometry: Rectangle<i32, Logical>,
+) -> Option<LayoutResizeEdges> {
+    const BAND: f64 = 16.0;
+    let left = f64::from(geometry.loc.x);
+    let top = f64::from(geometry.loc.y);
+    let right = left + f64::from(geometry.size.w);
+    let bottom = top + f64::from(geometry.size.h);
+    if position.x < left - BAND
+        || position.x > right + BAND
+        || position.y < top - BAND
+        || position.y > bottom + BAND
+    {
+        return None;
+    }
+    let edges = LayoutResizeEdges {
+        left: (position.x - left).abs() <= BAND,
+        right: (position.x - right).abs() <= BAND,
+        top: (position.y - top).abs() <= BAND,
+        bottom: (position.y - bottom).abs() <= BAND,
+    };
+    (edges.left || edges.right || edges.top || edges.bottom).then_some(edges)
+}
+
+/// Apply one gamepad tile edge drag. Splits share their boundary through the
+/// layout; any squeezed-out tile is backgrounded by this resize path.
+fn apply_edge_resize(
+    state: &mut RuntimeState,
+    window_id: u64,
+    phase: WindowPlacementPhase,
+    edges: LayoutResizeEdges,
+    delta_x: f64,
+    delta_y: f64,
+) {
+    let Some(window) = state
+        .wayland
+        .as_ref()
+        .and_then(|frontend| frontend.window_for_id(window_id))
+    else {
+        return;
+    };
+    let managed = state.wayland.as_ref().is_some_and(|frontend| {
+        frontend.gamepad_shell() && frontend.window_is_layout_managed(&window)
+    });
+    if !managed {
+        if phase == WindowPlacementPhase::End {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .finish_gamepad_resize();
+        }
+        return;
+    }
+    if phase == WindowPlacementPhase::Begin {
+        super::input::release_client_geometry_for_shell_grab(state, &window);
+        window_management::activate_window(state, &window, SERIAL_COUNTER.next_serial());
+        // Capture the pre-drag geometry so an eviction can restore it.
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .snapshot_gamepad_resize_geometry(window_id);
+    }
+    let mut backgrounded = Vec::new();
+    if phase == WindowPlacementPhase::Update {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .resize_layout_window(&window, edges, delta_x, delta_y);
+        // A resize that squeezes a pane out of existence backgrounds it. This
+        // includes the dragged window itself: dragging its own border until it
+        // is (almost) gone closes it to the background, for both a split pane
+        // and a lone exclusive tile.
+        let squeezed = state
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .layout_tiles_squeezed_out(&window);
+        if !squeezed.is_empty() {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .restore_gamepad_resize_layout();
+        }
+        for squeezed_id in squeezed {
+            // Restore the pre-drag geometry so a later restore returns the
+            // tile's size before the drag, not the squeezed sliver.
+            let restored = state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .restore_gamepad_resize_geometry(squeezed_id);
+            window_management::minimize_toplevel_by_id(state, squeezed_id);
+            if restored {
+                backgrounded.push(squeezed_id);
+            }
+        }
+    }
+    // Read the placements after any evictions so the collapsed layout is the
+    // one published, not a stale pre-collapse vector.
+    let placements = state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .layout_window_geometries(&window);
+    for (affected, geometry) in placements {
+        window_management::queue_transient_window_placement(
+            state,
+            &affected,
+            geometry,
+            phase,
+            WindowPlacementChange::Resize,
+        );
+    }
+    // After any squeezed Update from this sample, commit the pre-drag size.
+    for window_id in backgrounded {
+        window_management::publish_gamepad_backgrounded_geometry(state, window_id);
+    }
+    if phase == WindowPlacementPhase::End {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .finish_gamepad_resize();
+    }
+    state.scene_sync.mark_dirty();
+}
+
 fn constrain_local_geometry(
     geometry: WindowGeometry,
     change: WindowPlacementChange,
@@ -1651,99 +1786,6 @@ fn rounded_i32(value: f64) -> i32 {
             .round()
             .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
     }
-}
-
-pub(super) fn gamepad_resize_edges(
-    position: Point<f64, Logical>,
-    geometry: Rectangle<i32, Logical>,
-) -> Option<LayoutResizeEdges> {
-    const BAND: f64 = 16.0;
-    let left = f64::from(geometry.loc.x);
-    let top = f64::from(geometry.loc.y);
-    let right = left + f64::from(geometry.size.w);
-    let bottom = top + f64::from(geometry.size.h);
-    if position.x < left - BAND
-        || position.x > right + BAND
-        || position.y < top - BAND
-        || position.y > bottom + BAND
-    {
-        return None;
-    }
-    let edges = LayoutResizeEdges {
-        left: (position.x - left).abs() <= BAND,
-        right: (position.x - right).abs() <= BAND,
-        top: (position.y - top).abs() <= BAND,
-        bottom: (position.y - bottom).abs() <= BAND,
-    };
-    (edges.left || edges.right || edges.top || edges.bottom).then_some(edges)
-}
-
-/// Apply one gamepad tile edge drag on top of main's shared swipe routing.
-fn apply_edge_resize(
-    state: &mut RuntimeState,
-    window_id: u64,
-    phase: WindowPlacementPhase,
-    edges: LayoutResizeEdges,
-    delta_x: f64,
-    delta_y: f64,
-) {
-    let Some(window) = state
-        .wayland
-        .as_ref()
-        .and_then(|frontend| frontend.window_for_id(window_id))
-    else {
-        return;
-    };
-    let managed = state.wayland.as_ref().is_some_and(|frontend| {
-        frontend.gamepad_shell() && frontend.window_is_layout_managed(&window)
-    });
-    if !managed {
-        return;
-    }
-    if phase == WindowPlacementPhase::Begin {
-        super::input::release_client_geometry_for_shell_grab(state, &window);
-        window_management::activate_window(state, &window, SERIAL_COUNTER.next_serial());
-        state
-            .wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .snapshot_gamepad_single_geometry(window_id);
-    }
-    if phase == WindowPlacementPhase::Update {
-        state
-            .wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .resize_layout_window(&window, edges, delta_x, delta_y);
-        let squeezed = state
-            .wayland
-            .as_ref()
-            .expect("missing Wayland frontend")
-            .layout_siblings_squeezed_out(&window);
-        for squeezed_id in squeezed {
-            state
-                .wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .restore_gamepad_single_geometry(squeezed_id);
-            window_management::minimize_toplevel_by_id(state, squeezed_id);
-        }
-    }
-    let placements = state
-        .wayland
-        .as_ref()
-        .expect("missing Wayland frontend")
-        .layout_window_geometries(&window);
-    for (affected, geometry) in placements {
-        window_management::queue_transient_window_placement(
-            state,
-            &affected,
-            geometry,
-            phase,
-            WindowPlacementChange::Resize,
-        );
-    }
-    state.scene_sync.mark_dirty();
 }
 
 #[cfg(test)]

@@ -27,8 +27,8 @@ const DEFAULT_SYSTEM_BAR_THICKNESS: f64 = 32.0;
 pub(super) const MAX_SYSTEM_BAR_THICKNESS: f64 = 512.0;
 const DEFAULT_MAXIMIZE_PADDING: f64 = 10.0;
 pub(super) const MAX_MAXIMIZE_PADDING: f64 = 256.0;
-/// Touch Dock strip height for `DENIAL_SHELL_PROFILE=gamepad`.
-pub(super) const GAMEPAD_SYSTEM_BAR_THICKNESS: f64 = 51.0;
+/// Top-edge touch band reserved for short shell pull-down gestures.
+pub(super) const GAMEPAD_TOP_GESTURE_HEIGHT: f64 = 10.0;
 /// Logical pixels kept between a lone gamepad tile and the work-area edges.
 /// The touch shell has no pointer cursor to grab a flush edge, so a visible
 /// margin is what makes the resize border reachable.
@@ -102,8 +102,8 @@ impl WorkAreaOptions {
     /// Profile-local work-area policy, independent of stored desktop settings.
     pub(super) fn for_gamepad(mut self, gamepad: bool) -> Self {
         if gamepad {
-            self.system_bar.side = SystemBarSide::Top;
-            self.system_bar.thickness = GAMEPAD_SYSTEM_BAR_THICKNESS;
+            // The Gamepad Dock is an overlay, not reserved window space.
+            self.system_bar = SystemBarOptions::hidden();
             self.maximize_padding = GAMEPAD_WINDOW_MARGIN;
         }
         self
@@ -1433,7 +1433,10 @@ fn format_output_scale(scale_120: u32) -> String {
 mod tests {
     use denial_core::topology::OutputTransform;
 
-    use super::{Options, PersistedOutput, parse_output_config, render_persisted_output_config};
+    use super::{
+        Options, PersistedOutput, SystemBarSide, WorkAreaOptions, parse_output_config,
+        render_persisted_output_config,
+    };
     use crate::output_topology::ScrollingLayoutAxis;
 
     #[test]
@@ -1461,6 +1464,15 @@ mod tests {
 
         assert!(default.polkit_agent);
         assert!(!disabled.polkit_agent);
+    }
+
+    #[test]
+    fn gamepad_dock_does_not_reserve_window_work_area() {
+        let work_area = WorkAreaOptions::default().for_gamepad(true);
+
+        assert_eq!(work_area.system_bar.side, SystemBarSide::Hidden);
+        assert_eq!(work_area.system_bar.thickness, 0.0);
+        assert_eq!(work_area.maximize_padding, 16.0);
     }
 
     #[test]

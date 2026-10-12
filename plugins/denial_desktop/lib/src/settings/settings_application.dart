@@ -12,6 +12,7 @@ import 'package:denial_flutter_sdk/materials.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:denial_flutter_sdk/applications.dart';
+import 'package:denial_flutter_sdk/environment.dart';
 import 'package:denial_flutter_sdk/localization.dart';
 import 'package:denial_flutter_sdk/models.dart';
 import 'package:denial_flutter_sdk/state.dart';
@@ -153,12 +154,20 @@ class _DenialSettingsApplicationState
   Widget build(BuildContext context) {
     _scheduleRequestedPage(ref.watch(settingsPageOpenRequestProvider));
     final showFingerprint = ref.watch(fingerprintDeviceProvider).value ?? false;
+    final touchOptimized =
+        ref.watch(startupEnvironmentProvider)['DENIAL_SHELL_PROFILE'] ==
+        'gamepad';
     return Semantics(
       container: true,
       role: .main,
       label: context.l10n.settingsApplicationSemanticsLabel,
       child: Theme(
-        data: context.applicationTheme.materialTheme,
+        data: touchOptimized
+            ? context.applicationTheme.materialTheme.copyWith(
+                visualDensity: VisualDensity.standard,
+                materialTapTargetSize: MaterialTapTargetSize.padded,
+              )
+            : context.applicationTheme.materialTheme,
         child: LayoutBuilder(
           builder: (context, constraints) {
             final compactNavigation =
@@ -201,6 +210,7 @@ class _DenialSettingsApplicationState
                     navigation: SettingsNavigation(
                       selected: _page,
                       compact: compactNavigation,
+                      touchOptimized: touchOptimized,
                       showTouchpad: true,
                       showFingerprint: showFingerprint,
                       onSelected: _selectPage,

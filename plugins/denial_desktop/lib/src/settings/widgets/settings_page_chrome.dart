@@ -168,7 +168,7 @@ class SettingsCommand extends StatelessWidget {
     label: Text(label),
     style: TextButton.styleFrom(
       foregroundColor: context.applicationColors.foreground,
-      minimumSize: const Size(44, 44),
+      minimumSize: const Size(48, 48),
       shape: RoundedRectangleBorder(
         borderRadius: DenialSurfaceGeometry.borderRadiusOf(context, inset: 6),
       ),

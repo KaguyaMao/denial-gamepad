@@ -1356,10 +1356,10 @@ impl WaylandFrontend {
                 fallback_height
             };
             let minimized = self.surface_is_minimized(&surface.id());
+            let hidden_by_transient_parent = self.window_is_minimized_by_transient_parent(&window);
             let transient_parent_id = self.transient_parent_stable_id(&window);
             if !minimized
-                && let Some(parent_id) = transient_parent_id
-                && let Some(parent_location) = self.workspace_location(parent_id)
+                && let Some(parent_location) = self.transient_parent_workspace_for_window(&window)
             {
                 self.window_registry
                     .ensure(WindowId::new(stable_id))
@@ -1459,6 +1459,7 @@ impl WaylandFrontend {
                 workspace_id,
                 transient_parent_id: transient_parent_id.unwrap_or(0),
                 minimized,
+                hidden_by_transient_parent,
                 fullscreen: presentation.fullscreen,
                 maximized: presentation.maximized,
                 pinned: self.window_is_pinned(&window),
@@ -1570,6 +1571,7 @@ impl WaylandFrontend {
                 workspace_id,
                 transient_parent_id: 0,
                 minimized,
+                hidden_by_transient_parent: false,
                 fullscreen: false,
                 maximized: false,
                 pinned: self.window_id_is_pinned(local_window.id),
@@ -1755,6 +1757,7 @@ impl WaylandFrontend {
                     workspace_id: -1,
                     transient_parent_id: 0,
                     minimized: false,
+                    hidden_by_transient_parent: false,
                     fullscreen: false,
                     maximized: false,
                     pinned: true,
@@ -1897,6 +1900,7 @@ impl WaylandFrontend {
                     workspace_id: 1,
                     transient_parent_id: 0,
                     minimized: false,
+                    hidden_by_transient_parent: false,
                     fullscreen: false,
                     maximized: false,
                     pinned: false,

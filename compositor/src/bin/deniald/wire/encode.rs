@@ -681,6 +681,7 @@ fn create_window_snapshot<'a>(
                 monitor_id: description.monitor_id,
                 workspace_id: description.workspace_id,
                 transient_parent_id: description.transient_parent_id,
+                hidden_by_transient_parent: description.hidden_by_transient_parent,
                 minimized: description.minimized,
                 fullscreen: description.fullscreen,
                 maximized: description.maximized,

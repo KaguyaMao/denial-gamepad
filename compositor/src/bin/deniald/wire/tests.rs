@@ -950,19 +950,45 @@ fn enforces_message_collection_and_command_queue_limits() {
 #[test]
 fn overview_termination_is_explicit_and_rejects_unknown_flags() {
     let mut bridge = bridge();
-    bridge.handle(&window_request_with_flags(
-        fb::WindowRequestKind::CloseWindow, 0, 42, None, 1, 1,
-    )).unwrap();
-    assert_eq!(bridge.pending_window_commands.pop_front(),
-        Some(WindowCommand::TerminateOverviewGroup { window_id: 42 }));
-    bridge.handle(&window_request_with_flags(
-        fb::WindowRequestKind::CloseWindow, 0, 42, None, 2, 0,
-    )).unwrap();
-    assert_eq!(bridge.pending_window_commands.pop_front(),
-        Some(WindowCommand::Close { window_id: 42 }));
-    assert!(matches!(bridge.handle(&window_request_with_flags(
-        fb::WindowRequestKind::CloseWindow, 0, 42, None, 3, 2,
-    )), Err(WireError::Flags)));
+    bridge
+        .handle(&window_request_with_flags(
+            fb::WindowRequestKind::CloseWindow,
+            0,
+            42,
+            None,
+            1,
+            1,
+        ))
+        .unwrap();
+    assert_eq!(
+        bridge.pending_window_commands.pop_front(),
+        Some(WindowCommand::TerminateOverviewGroup { window_id: 42 })
+    );
+    bridge
+        .handle(&window_request_with_flags(
+            fb::WindowRequestKind::CloseWindow,
+            0,
+            42,
+            None,
+            2,
+            0,
+        ))
+        .unwrap();
+    assert_eq!(
+        bridge.pending_window_commands.pop_front(),
+        Some(WindowCommand::Close { window_id: 42 })
+    );
+    assert!(matches!(
+        bridge.handle(&window_request_with_flags(
+            fb::WindowRequestKind::CloseWindow,
+            0,
+            42,
+            None,
+            3,
+            2,
+        )),
+        Err(WireError::Flags)
+    ));
 }
 
 #[test]
@@ -1207,6 +1233,7 @@ fn scene_window(id: u64) -> WindowDescription {
         workspace_id: 1,
         transient_parent_id: 0,
         minimized: false,
+        hidden_by_transient_parent: false,
         fullscreen: false,
         maximized: false,
         pinned: false,

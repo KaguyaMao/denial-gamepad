@@ -4228,6 +4228,7 @@ impl<'a> Window<'a> {
   pub const VT_PET: flatbuffers::VOffsetT = 100;
   pub const VT_PET_HOLDS: flatbuffers::VOffsetT = 102;
   pub const VT_PET_DRAGGED: flatbuffers::VOffsetT = 104;
+  pub const VT_HIDDEN_BY_TRANSIENT_PARENT: flatbuffers::VOffsetT = 106;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -4277,6 +4278,7 @@ impl<'a> Window<'a> {
     builder.add_width(args.width);
     if let Some(x) = args.app_id { builder.add_app_id(x); }
     if let Some(x) = args.title { builder.add_title(x); }
+    builder.add_hidden_by_transient_parent(args.hidden_by_transient_parent);
     builder.add_pet_dragged(args.pet_dragged);
     builder.add_pet(args.pet);
     builder.add_pet_below(args.pet_below);
@@ -4651,6 +4653,13 @@ impl<'a> Window<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<bool>(Window::VT_PET_DRAGGED, Some(false)).unwrap()}
   }
+  #[inline]
+  pub fn hidden_by_transient_parent(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(Window::VT_HIDDEN_BY_TRANSIENT_PARENT, Some(false)).unwrap()}
+  }
 }
 
 impl flatbuffers::Verifiable for Window<'_> {
@@ -4711,6 +4720,7 @@ impl flatbuffers::Verifiable for Window<'_> {
      .visit_field::<bool>("pet", Self::VT_PET, false)?
      .visit_field::<u32>("pet_holds", Self::VT_PET_HOLDS, false)?
      .visit_field::<bool>("pet_dragged", Self::VT_PET_DRAGGED, false)?
+     .visit_field::<bool>("hidden_by_transient_parent", Self::VT_HIDDEN_BY_TRANSIENT_PARENT, false)?
      .finish();
     Ok(())
   }
@@ -4767,6 +4777,7 @@ pub struct WindowArgs<'a> {
     pub pet: bool,
     pub pet_holds: u32,
     pub pet_dragged: bool,
+    pub hidden_by_transient_parent: bool,
 }
 impl<'a> Default for WindowArgs<'a> {
   #[inline]
@@ -4823,6 +4834,7 @@ impl<'a> Default for WindowArgs<'a> {
       pet: false,
       pet_holds: 0,
       pet_dragged: false,
+      hidden_by_transient_parent: false,
     }
   }
 }
@@ -5037,6 +5049,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> WindowBuilder<'a, 'b, A> {
     self.fbb_.push_slot::<bool>(Window::VT_PET_DRAGGED, pet_dragged, false);
   }
   #[inline]
+  pub fn add_hidden_by_transient_parent(&mut self, hidden_by_transient_parent: bool) {
+    self.fbb_.push_slot::<bool>(Window::VT_HIDDEN_BY_TRANSIENT_PARENT, hidden_by_transient_parent, false);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> WindowBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     WindowBuilder {
@@ -5105,6 +5121,7 @@ impl core::fmt::Debug for Window<'_> {
       ds.field("pet", &self.pet());
       ds.field("pet_holds", &self.pet_holds());
       ds.field("pet_dragged", &self.pet_dragged());
+      ds.field("hidden_by_transient_parent", &self.hidden_by_transient_parent());
       ds.finish()
   }
 }

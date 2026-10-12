@@ -123,7 +123,7 @@ impl WaylandFrontend {
             .cloned()
     }
 
-    fn transient_family_root(&self, window: &Window) -> Window {
+    pub(super) fn transient_family_root(&self, window: &Window) -> Window {
         let mut root = window.clone();
         // A client must not be able to make compositor traversal unbounded
         // with a malformed transient cycle. Every successful step consumes
@@ -238,10 +238,17 @@ impl WaylandFrontend {
         let layout_maximized = root
             .as_ref()
             .is_some_and(|root| self.window_layout.is_maximized(&root.id()));
-        let fullscreen = client.fullscreen || shell_fullscreen;
+        let gamepad_overlay = self.gamepad_shell
+            && root.as_ref().is_some_and(|root| {
+                self.window_record_for_surface(&root.id())
+                    .is_some_and(|record| record.gamepad_floating_overlay)
+            });
+        let fullscreen = !gamepad_overlay && (client.fullscreen || shell_fullscreen);
         ManagedWindowPresentation {
             fullscreen,
-            maximized: !fullscreen && (client.maximized || shell_maximized || layout_maximized),
+            maximized: !gamepad_overlay
+                && !fullscreen
+                && (client.maximized || shell_maximized || layout_maximized),
             server_side_decorated: facts.is_some_and(|facts| facts.server_side_decorated),
         }
     }
@@ -332,6 +339,14 @@ impl WaylandFrontend {
     }
 
     pub(super) fn window_has_transient_parent(&self, window: &Window) -> bool {
+        #[cfg(feature = "flutter")]
+        if self
+            .window_root_surface(window)
+            .and_then(|root| self.window_record_for_surface(&root.id()))
+            .is_some_and(|record| record.transient_parent_orphaned)
+        {
+            return false;
+        }
         if window.toplevel().is_some() {
             return xdg_transient_parent_surface(window).is_some();
         }
@@ -339,13 +354,46 @@ impl WaylandFrontend {
             .is_some_and(|window| window.facts().transient_parent_id.is_some())
     }
 
+    #[cfg(feature = "flutter")]
+    pub(super) fn window_is_minimized_by_transient_parent(&self, window: &Window) -> bool {
+        let mut current = window.clone();
+        for _ in 0..=self.space.elements().count() {
+            let Some(parent_id) = self.transient_parent_stable_id(&current) else {
+                return false;
+            };
+            if self
+                .window_record(parent_id)
+                .is_some_and(|record| record.minimized)
+            {
+                return true;
+            }
+            let Some(parent) = self.window_for_id(parent_id) else {
+                return false;
+            };
+            current = parent;
+        }
+        false
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn window_is_effectively_minimized(&self, window: &Window) -> bool {
+        let Some(root) = self.window_root_surface(window) else {
+            return false;
+        };
+        self.surface_is_minimized(&root.id())
+            || self.window_is_minimized_by_transient_parent(window)
+    }
+
     /// Reconciles a live XDG toplevel after either xdg-shell or xdg-foreign
     /// changes its parent. Both protocol paths update the same Smithay parent
     /// state, so layout membership, placement and stacking remain one policy.
     pub(super) fn reconcile_xdg_parent_change(&mut self, window: &Window) {
         let previous_target = self.window_geometry_target(window);
+        #[cfg(feature = "flutter")]
+        self.sync_transient_parent_context(window);
         self.reconcile_window_layout(window);
         self.reconcile_xdg_transient_window_placement(window);
+        self.reconcile_xdg_transient_descendant_placements(window);
         self.raise_window(window, false);
         if self.window_geometry_target(window) != previous_target {
             self.update_window_output_membership(window);
@@ -363,9 +411,233 @@ impl WaylandFrontend {
 
     #[cfg(feature = "flutter")]
     pub(super) fn transient_parent_stable_id(&self, window: &Window) -> Option<u64> {
+        if let Some(parent) = self.transient_parent_window(window)
+            && let Some(root) = self.window_root_surface(&parent)
+        {
+            return self.surface_ids.get(&root.id()).copied();
+        }
+        let root = self.window_root_surface(window)?;
+        let record = self.window_record_for_surface(&root.id())?;
+        if record.transient_parent_orphaned {
+            return None;
+        }
+        record
+            .transient_parent_surface
+            .as_ref()
+            .and_then(|surface| self.surface_ids.get(surface).copied())
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn transient_parent_workspace_for_window(
+        &self,
+        window: &Window,
+    ) -> Option<super::workspace::WorkspaceLocation> {
+        self.transient_parent_stable_id(window)
+            .and_then(|parent_id| self.workspace_location(parent_id))
+            .or_else(|| {
+                let root = self.window_root_surface(window)?;
+                let record = self.window_record_for_surface(&root.id())?;
+                (!record.transient_parent_orphaned && self.window_has_transient_parent(window))
+                    .then_some(record.transient_parent_workspace)
+                    .flatten()
+            })
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn sync_transient_descendant_workspaces(
+        &mut self,
+        parent: &Window,
+        location: super::workspace::WorkspaceLocation,
+    ) {
+        let descendants = self.transient_stack_from(parent);
+        for child in descendants.into_iter().filter(|child| child != parent) {
+            let Some(root) = self.window_root_surface(&child) else {
+                continue;
+            };
+            let Some(record) = self.window_record_for_surface_mut(&root.id()) else {
+                continue;
+            };
+            if !record.minimized {
+                record.workspace = Some(location);
+            }
+            record.transient_parent_workspace = Some(location);
+        }
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn sync_transient_family_workspace(
+        &mut self,
+        window: &Window,
+        location: super::workspace::WorkspaceLocation,
+    ) {
+        let root = self.transient_family_root(window);
+        self.sync_transient_descendant_workspaces(&root, location);
+        if let Some(root_surface) = self.window_root_surface(&root)
+            && let Some(stable_id) = self.surface_id(&root_surface)
+            && let Some(record) = self.window_record_mut(stable_id)
+        {
+            if !record.minimized {
+                record.workspace = Some(location);
+            }
+        }
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn transient_parent_geometry_for_window(
+        &self,
+        window: &Window,
+    ) -> Option<Rectangle<i32, Logical>> {
         self.transient_parent_window(window)
-            .and_then(|parent| self.window_root_surface(&parent))
-            .and_then(|root| self.surface_ids.get(&root.id()).copied())
+            .map(|parent| self.window_geometry_target(&parent))
+            .or_else(|| {
+                let root = self.window_root_surface(window)?;
+                let record = self.window_record_for_surface(&root.id())?;
+                (!record.transient_parent_orphaned && self.window_has_transient_parent(window))
+                    .then_some(record.transient_parent_geometry)
+                    .flatten()
+            })
+    }
+
+    /// Captures the parent context before a transient is admitted or published.
+    /// The cache is intentionally retained while the parent is temporarily
+    /// unmapped, but is invalidated when the client removes the relationship.
+    #[cfg(feature = "flutter")]
+    pub(super) fn sync_transient_parent_context(&mut self, window: &Window) -> bool {
+        let Some(root) = self.window_root_surface(window) else {
+            return false;
+        };
+        let parent_surface = window
+            .toplevel()
+            .and_then(|_| xdg_transient_parent_surface(window));
+        let parent_protocol_id =
+            ManagedWindow::new(window).and_then(|managed| managed.facts().transient_parent_id);
+        let parent_window = self.transient_parent_window(window);
+        let parent_surface_id = parent_surface.as_ref().map(Resource::id);
+        let parent_location = parent_window
+            .as_ref()
+            .and_then(|parent| self.window_root_surface(parent))
+            .and_then(|surface| self.surface_id(&surface))
+            .and_then(|parent_id| self.workspace_location(parent_id))
+            .or_else(|| {
+                parent_surface_id
+                    .as_ref()
+                    .and_then(|surface| self.surface_ids.get(surface).copied())
+                    .and_then(|parent_id| self.workspace_location(parent_id))
+            });
+        let parent_geometry = parent_window
+            .as_ref()
+            .map(|parent| self.window_geometry_target(parent));
+        let has_parent = parent_surface.is_some() || parent_protocol_id.is_some();
+        let parent_alive = parent_surface.as_ref().is_none_or(WlSurface::is_alive);
+        let record = self
+            .ensure_window_record_for_surface(&root.id())
+            .expect("managed window has no stable id");
+        let relation_changed = record.transient_parent_surface != parent_surface_id
+            || record.transient_parent_protocol_id != parent_protocol_id;
+        if !has_parent {
+            let changed = record.transient_parent_surface.is_some()
+                || record.transient_parent_protocol_id.is_some()
+                || record.transient_parent_workspace.is_some()
+                || record.transient_parent_geometry.is_some()
+                || record.transient_parent_orphaned;
+            record.transient_parent_surface = None;
+            record.transient_parent_protocol_id = None;
+            record.transient_parent_workspace = None;
+            record.transient_parent_geometry = None;
+            record.transient_parent_orphaned = false;
+            return changed;
+        }
+        if relation_changed {
+            record.transient_parent_workspace = None;
+            record.transient_parent_geometry = None;
+            record.transient_parent_orphaned = false;
+        }
+        record.transient_parent_surface = parent_surface_id;
+        record.transient_parent_protocol_id = parent_protocol_id;
+        if !parent_alive {
+            record.transient_parent_orphaned = true;
+        } else if parent_window.is_some() {
+            record.transient_parent_orphaned = false;
+        }
+        if let Some(location) = parent_location {
+            record.transient_parent_workspace = Some(location);
+            if !record.minimized {
+                record.workspace = Some(location);
+            }
+        }
+        if let Some(geometry) = parent_geometry {
+            record.transient_parent_geometry = Some(geometry);
+        }
+        relation_changed || parent_location.is_some() || parent_geometry.is_some()
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn mark_transient_children_orphaned(&mut self, parent: &Window) {
+        // Mark the complete descendant family. A direct child can own nested
+        // dialogs, and the parent may leave `space` before those descendants
+        // are reconciled.
+        let mut orphaned_surfaces = self
+            .window_root_surface(parent)
+            .map(|surface| vec![surface.id()])
+            .unwrap_or_default();
+        let mut orphaned_protocol_ids = ManagedWindow::new(parent)
+            .and_then(|managed| managed.facts().protocol_window_id)
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        loop {
+            let children = self
+                .space
+                .elements()
+                .filter(|candidate| {
+                    let Some(root) = self.window_root_surface(candidate) else {
+                        return false;
+                    };
+                    if orphaned_surfaces.contains(&root.id()) {
+                        return false;
+                    }
+                    let Some(record) = self.window_record_for_surface(&root.id()) else {
+                        return false;
+                    };
+                    orphaned_surfaces.iter().any(|surface| {
+                        record.transient_parent_surface.as_ref() == Some(surface)
+                            || record.placed_transient_parent.as_ref() == Some(surface)
+                    }) || orphaned_protocol_ids
+                        .iter()
+                        .any(|id| record.transient_parent_protocol_id == Some(*id))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if children.is_empty() {
+                break;
+            }
+
+            let mut discovered = false;
+            for child in children {
+                let Some(root) = self.window_root_surface(&child) else {
+                    continue;
+                };
+                let root_id = root.id();
+                let protocol_id = ManagedWindow::new(&child)
+                    .and_then(|managed| managed.facts().protocol_window_id);
+                if let Some(record) = self.window_record_for_surface_mut(&root_id) {
+                    record.transient_parent_orphaned = true;
+                }
+                if !orphaned_surfaces.contains(&root_id) {
+                    orphaned_surfaces.push(root_id);
+                    discovered = true;
+                }
+                if let Some(protocol_id) = protocol_id
+                    && !orphaned_protocol_ids.contains(&protocol_id)
+                {
+                    orphaned_protocol_ids.push(protocol_id);
+                    discovered = true;
+                }
+            }
+            if !discovered {
+                break;
+            }
+        }
     }
 
     /// Places a parented XDG toplevel once its client-selected size exists and
@@ -411,7 +683,22 @@ impl WaylandFrontend {
                     record.placed_transient_parent_geometry == Some(parent_geometry),
                 )
             });
-        if same_parent && same_parent_geometry {
+        #[cfg(feature = "flutter")]
+        let workspace_changed = self
+            .surface_id(&parent_surface)
+            .and_then(|parent_id| self.workspace_location(parent_id))
+            .and_then(|location| {
+                let child_id = self.surface_id(root)?;
+                let record = self.window_record_mut(child_id)?;
+                let changed = record.workspace != Some(location);
+                record.workspace = Some(location);
+                record.transient_parent_workspace = Some(location);
+                Some(changed)
+            })
+            .unwrap_or(false);
+        #[cfg(not(feature = "flutter"))]
+        let workspace_changed = false;
+        if same_parent && same_parent_geometry && !workspace_changed {
             return None;
         }
         let output_geometry = self
@@ -426,16 +713,6 @@ impl WaylandFrontend {
         let record = self.ensure_window_record_for_surface(&object_id)?;
         record.placed_transient_parent = Some(parent_id.clone());
         record.placed_transient_parent_geometry = Some(parent_geometry);
-
-        #[cfg(feature = "flutter")]
-        if let (Some(window_id), Some(parent_id)) =
-            (self.surface_id(root), self.surface_id(&parent_surface))
-            && let Some(parent_location) = self.workspace_location(parent_id)
-        {
-            self.window_registry
-                .ensure(WindowId::new(window_id))
-                .workspace = Some(parent_location);
-        }
 
         if !same_parent {
             info!(
@@ -458,6 +735,17 @@ impl WaylandFrontend {
         parent: &Window,
     ) -> bool {
         let descendants = self.transient_stack_from(parent);
+        #[cfg(feature = "flutter")]
+        if self.gamepad_shell {
+            return descendants
+                .into_iter()
+                .filter(|candidate| candidate != parent && candidate.toplevel().is_some())
+                .fold(false, |changed, candidate| {
+                    let previous = self.window_geometry_target(&candidate);
+                    self.reconcile_gamepad_stacked_window(&candidate);
+                    changed || self.window_geometry_target(&candidate) != previous
+                });
+        }
         descendants
             .into_iter()
             .filter(|candidate| candidate != parent && candidate.toplevel().is_some())
@@ -1600,7 +1888,15 @@ impl WaylandFrontend {
                     self.mark_window_minimized(window_id, fallback);
                 }
             } else {
-                self.restore_window_workspace(window_id);
+                let location = self.restore_window_workspace(window_id);
+                if let Some(location) = location
+                    && let Some(window) = self.window_for_id(window_id)
+                {
+                    self.sync_transient_family_workspace(&window, location);
+                }
+            }
+            if let Some(window) = self.window_for_id(window_id) {
+                self.reconcile_xdg_transient_descendant_placements(&window);
             }
             self.invalidate_idle_inhibition();
         }
@@ -1621,6 +1917,11 @@ impl WaylandFrontend {
             .space
             .elements()
             .any(|window| self.window_root_surface(window).as_ref() == Some(surface));
+
+        #[cfg(feature = "flutter")]
+        if removes_toplevel && let Some(parent) = self.window_for_root_surface(surface) {
+            self.mark_transient_children_orphaned(&parent);
+        }
 
         self.surface_buffers.remove(&object_id);
         let layout_changed = self.window_layout.remove(&object_id);
@@ -1724,6 +2025,27 @@ impl WaylandFrontend {
             // disconnect can destroy wl_surface directly. Reflow here as the
             // final safety net so surviving tiles still receive their resize.
             self.arrange_layout_windows();
+        }
+        #[cfg(feature = "flutter")]
+        if removes_toplevel {
+            self.reconcile_orphaned_transient_windows();
+        }
+    }
+
+    #[cfg(feature = "flutter")]
+    fn reconcile_orphaned_transient_windows(&mut self) {
+        let orphaned = self
+            .space
+            .elements()
+            .filter(|window| {
+                self.window_root_surface(window)
+                    .and_then(|root| self.window_record_for_surface(&root.id()))
+                    .is_some_and(|record| record.transient_parent_orphaned)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for window in orphaned {
+            self.reconcile_window_layout(&window);
         }
     }
 }

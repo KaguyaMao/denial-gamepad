@@ -109,10 +109,15 @@ class _LockScreenLayerState extends ConsumerState<LockScreenLayer>
               )
               .where((entry) => !entry.rect.isEmpty)
               .toList(growable: false);
+          // A tablet-sized mobile output is still a mobile shell. In
+          // particular, its authentication panel must use the mobile
+          // keyboard-aware viewport rather than switching to the desktop
+          // lock layout just because the logical width exceeds 900 px.
           final desktop =
-              shellProfile == ReferenceShellProfile.desktop ||
-              canvas.width >= 900 ||
-              outputs.length > 1;
+              shellProfile != ReferenceShellProfile.mobile &&
+              (shellProfile == ReferenceShellProfile.desktop ||
+                  canvas.width >= 900 ||
+                  outputs.length > 1);
           late final Widget scene;
           if (outputs.length <= 1) {
             scene = Stack(

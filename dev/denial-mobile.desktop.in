@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Denial Mobile
+Comment=Denial mobile profile for a single-app tablet experience
+Exec=/usr/bin/bash @LAUNCHER@
+# SDDM probes TryExec before authenticating. The checkout may live below a
+# private home directory, so probe the system shell instead of the launcher.
+TryExec=/usr/bin/bash
+Type=Application
+DesktopNames=Denial
+Keywords=wayland;compositor;flutter;mobile;tablet;
+X-Denial-Mobile-Profile=mobile

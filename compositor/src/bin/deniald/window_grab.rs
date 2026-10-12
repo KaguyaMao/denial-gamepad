@@ -815,21 +815,34 @@ impl PointerGrab<RuntimeState> for TileResizeGrab {
                 WindowPlacementChange::Resize,
             );
         }
-        // The touch shell keeps one workspace. When a resize squeezes a sibling
-        // pane out of existence, background it and let the resized window take
+        // The touch shell keeps one workspace. When resizing squeezes either
+        // tile out of existence, background it and let the remaining tile take
         // the space.
         let squeezed = data
             .wayland
             .as_ref()
             .filter(|frontend| frontend.gamepad_shell())
-            .map(|frontend| frontend.layout_siblings_squeezed_out(&self.window))
+            .map(|frontend| frontend.layout_tiles_squeezed_out(&self.window))
             .unwrap_or_default();
-        for window_id in squeezed {
+        if !squeezed.is_empty() {
             data.wayland
                 .as_mut()
                 .expect("missing Wayland frontend")
-                .restore_gamepad_single_geometry(window_id);
+                .restore_gamepad_resize_layout();
+        }
+        for window_id in squeezed {
+            let restored = data
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .restore_gamepad_resize_geometry(window_id);
             super::wayland_frontend::minimize_toplevel_by_id(data, window_id);
+            if restored {
+                // The motion handler already queued this sample's squeezed
+                // update. End the transaction with the pre-drag rectangle
+                // before the scene snapshot is built.
+                super::wayland_frontend::publish_gamepad_backgrounded_geometry(data, window_id);
+            }
         }
         data.scene_sync.mark_dirty();
     }
@@ -854,10 +867,9 @@ impl PointerGrab<RuntimeState> for TileResizeGrab {
     }
 
     fn unset(&mut self, data: &mut RuntimeState) {
-        data.wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .set_compositor_pointer_grab_active(false);
+        let frontend = data.wayland.as_mut().expect("missing Wayland frontend");
+        frontend.set_compositor_pointer_grab_active(false);
+        frontend.finish_gamepad_resize();
         for window in self.affected_windows.clone() {
             if !window_is_mapped(data, &window) {
                 continue;

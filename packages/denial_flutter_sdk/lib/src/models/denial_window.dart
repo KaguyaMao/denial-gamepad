@@ -173,6 +173,7 @@ class DenialWindow {
     this.workspaceId = 1,
     this.transientParentObjectId,
     this.minimized = false,
+    this.hiddenByTransientParent = false,
     this.fullscreen = false,
     this.maximized = false,
     required this.transform,
@@ -218,6 +219,7 @@ class DenialWindow {
   final int workspaceId;
   final int? transientParentObjectId;
   final bool minimized;
+  final bool hiddenByTransientParent;
   final bool fullscreen;
   final bool maximized;
   final int transform;
@@ -276,6 +278,12 @@ class DenialWindow {
 
   bool get isUserApp =>
       !isLayerShell && !isPopupSurface && !isHome && !isSystemUi;
+
+  /// Whether this user application participates in the shell's presentation
+  /// and input projections. Inherited-hidden transient children remain in the
+  /// native snapshot so their parent and destruction lifecycle can reconcile,
+  /// but they must not become focus, overview, or placement targets.
+  bool get isPresentedUserApp => isUserApp && !hiddenByTransientParent;
 
   /// Whether this scene entry should play Denial's one-time window entrance.
   ///
@@ -440,6 +448,7 @@ class DenialWindow {
         other.workspaceId == workspaceId &&
         other.transientParentObjectId == transientParentObjectId &&
         other.minimized == minimized &&
+        other.hiddenByTransientParent == hiddenByTransientParent &&
         other.fullscreen == fullscreen &&
         other.maximized == maximized &&
         other.pinned == pinned &&
@@ -482,6 +491,7 @@ class DenialWindow {
         other.workspaceId == workspaceId &&
         other.transientParentObjectId == transientParentObjectId &&
         other.minimized == minimized &&
+        other.hiddenByTransientParent == hiddenByTransientParent &&
         other.fullscreen == fullscreen &&
         other.maximized == maximized &&
         other.transform == transform &&
@@ -537,6 +547,7 @@ class DenialWindow {
     workspaceId,
     transientParentObjectId,
     minimized,
+    hiddenByTransientParent,
     fullscreen,
     maximized,
     transform,

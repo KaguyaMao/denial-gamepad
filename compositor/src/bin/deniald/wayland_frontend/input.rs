@@ -943,8 +943,10 @@ impl WaylandFrontend {
                 .iter()
                 .find(|output| output.logical_geometry.to_f64().contains(position))?;
             let bounds = output.logical_geometry;
-            // The Dock strip reserves its own gestures (shade/home).
-            if position.y < f64::from(bounds.loc.y) + crate::options::GAMEPAD_SYSTEM_BAR_THICKNESS {
+            // Only the narrow top-edge gesture handle belongs to the shell;
+            // the Dock itself overlays windows and the rest of the top edge
+            // remains touchable by clients.
+            if position.y < f64::from(bounds.loc.y) + crate::options::GAMEPAD_TOP_GESTURE_HEIGHT {
                 return None;
             }
             // Edge resize, front-to-back, excluding the physical bottom edge

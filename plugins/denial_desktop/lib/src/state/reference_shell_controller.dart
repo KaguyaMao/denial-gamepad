@@ -240,10 +240,8 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
       return;
     }
     state = state.copyWith(
-      clearForegroundObjectId:
-          state.windowByObjectId(state.foregroundObjectId) == null,
-      clearLaunchingObjectId:
-          state.windowByObjectId(state.launchingObjectId) == null,
+      clearForegroundObjectId: state.foregroundWindow == null,
+      clearLaunchingObjectId: state.launchingWindow == null,
     );
   }
 
@@ -288,7 +286,7 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
     required String? iconPath,
     Rect? sourceRect,
   }) {
-    if (!window.isUserApp) {
+    if (!window.isPresentedUserApp) {
       return null;
     }
     return _beginLauncherTransition(
@@ -468,7 +466,7 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
   }
 
   void focusWindow(DenialWindow window) {
-    if (!window.isUserApp) {
+    if (!window.isPresentedUserApp) {
       return;
     }
 
@@ -515,7 +513,7 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
       return;
     }
     for (final window in state.windows) {
-      if (window.windowId == windowId && window.isUserApp) {
+      if (window.windowId == windowId && window.isPresentedUserApp) {
         final appId = AppLaunchRequest.normalizeAppId(window.appId);
         if (_backgroundLaunchAppIds.remove(appId)) {
           return;

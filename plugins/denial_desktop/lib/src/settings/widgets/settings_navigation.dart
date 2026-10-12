@@ -78,6 +78,7 @@ class SettingsNavigation extends StatelessWidget {
     required this.selected,
     required this.onSelected,
     required this.compact,
+    this.touchOptimized = false,
     this.showTouchpad = false,
     this.showFingerprint = false,
     super.key,
@@ -86,6 +87,7 @@ class SettingsNavigation extends StatelessWidget {
   final SettingsPageId selected;
   final ValueChanged<SettingsPageId> onSelected;
   final bool compact;
+  final bool touchOptimized;
   final bool showTouchpad;
   final bool showFingerprint;
 
@@ -113,9 +115,14 @@ class SettingsNavigation extends StatelessWidget {
             backgroundColor: active
                 ? context.applicationColors.foreground.withValues(alpha: .12)
                 : null,
-            minimumSize: const Size(44, 44),
+            minimumSize: touchOptimized
+                ? const Size(56, 56)
+                : const Size(48, 48),
             alignment: AlignmentDirectional.centerStart,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: EdgeInsets.symmetric(
+              horizontal: touchOptimized ? 16 : 12,
+              vertical: touchOptimized ? 14 : 10,
+            ),
             shape: RoundedRectangleBorder(
               borderRadius: DenialSurfaceGeometry.borderRadiusOf(
                 context,
@@ -126,8 +133,8 @@ class SettingsNavigation extends StatelessWidget {
           child: Row(
             mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
             children: [
-              Icon(page.icon, size: 19),
-              const SizedBox(width: 12),
+              Icon(page.icon, size: touchOptimized ? 23 : 19),
+              SizedBox(width: touchOptimized ? 16 : 12),
               if (compact) label else Expanded(child: label),
             ],
           ),

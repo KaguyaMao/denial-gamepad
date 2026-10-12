@@ -1945,10 +1945,11 @@ class Window {
   bool get pet => const fb.BoolReader().vTableGet(_bc, _bcOffset, 100, false);
   int get petHolds => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 102, 0);
   bool get petDragged => const fb.BoolReader().vTableGet(_bc, _bcOffset, 104, false);
+  bool get hiddenByTransientParent => const fb.BoolReader().vTableGet(_bc, _bcOffset, 106, false);
 
   @override
   String toString() {
-    return 'Window{objectId: ${objectId}, objectKind: ${objectKind}, surfaceId: ${surfaceId}, windowId: ${windowId}, textureId: ${textureId}, title: ${title}, appId: ${appId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, geometryX: ${geometryX}, geometryY: ${geometryY}, geometryWidth: ${geometryWidth}, geometryHeight: ${geometryHeight}, monitorId: ${monitorId}, transform: ${transform}, scale120: ${scale120}, statusColorArgb: ${statusColorArgb}, hasStatusColor: ${hasStatusColor}, contentX: ${contentX}, contentY: ${contentY}, contentWidth: ${contentWidth}, contentHeight: ${contentHeight}, surfaces: ${surfaces}, pinned: ${pinned}, suppressAnimations: ${suppressAnimations}, serverSideDecorated: ${serverSideDecorated}, opacity: ${opacity}, contentKind: ${contentKind}, opacityClass: ${opacityClass}, workspaceId: ${workspaceId}, minimized: ${minimized}, fullscreen: ${fullscreen}, maximized: ${maximized}, transientParentId: ${transientParentId}, heldByWindowId: ${heldByWindowId}, heldHold: ${heldHold}, heldShare: ${heldShare}, petAnchorX: ${petAnchorX}, petAnchorY: ${petAnchorY}, petBelow: ${petBelow}, pet: ${pet}, petHolds: ${petHolds}, petDragged: ${petDragged}}';
+    return 'Window{objectId: ${objectId}, objectKind: ${objectKind}, surfaceId: ${surfaceId}, windowId: ${windowId}, textureId: ${textureId}, title: ${title}, appId: ${appId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, geometryX: ${geometryX}, geometryY: ${geometryY}, geometryWidth: ${geometryWidth}, geometryHeight: ${geometryHeight}, monitorId: ${monitorId}, transform: ${transform}, scale120: ${scale120}, statusColorArgb: ${statusColorArgb}, hasStatusColor: ${hasStatusColor}, contentX: ${contentX}, contentY: ${contentY}, contentWidth: ${contentWidth}, contentHeight: ${contentHeight}, surfaces: ${surfaces}, pinned: ${pinned}, suppressAnimations: ${suppressAnimations}, serverSideDecorated: ${serverSideDecorated}, opacity: ${opacity}, contentKind: ${contentKind}, opacityClass: ${opacityClass}, workspaceId: ${workspaceId}, minimized: ${minimized}, fullscreen: ${fullscreen}, maximized: ${maximized}, transientParentId: ${transientParentId}, heldByWindowId: ${heldByWindowId}, heldHold: ${heldHold}, heldShare: ${heldShare}, petAnchorX: ${petAnchorX}, petAnchorY: ${petAnchorY}, petBelow: ${petBelow}, pet: ${pet}, petHolds: ${petHolds}, petDragged: ${petDragged}, hiddenByTransientParent: ${hiddenByTransientParent}}';
   }
 }
 
@@ -1966,7 +1967,7 @@ class WindowBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(51);
+    fbBuilder.startTable(52);
   }
 
   int addObjectId(int? objectId) {
@@ -2173,6 +2174,10 @@ class WindowBuilder {
     fbBuilder.addBool(50, petDragged);
     return fbBuilder.offset;
   }
+  int addHiddenByTransientParent(bool? hiddenByTransientParent) {
+    fbBuilder.addBool(51, hiddenByTransientParent);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -2231,6 +2236,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
   final bool? _pet;
   final int? _petHolds;
   final bool? _petDragged;
+  final bool? _hiddenByTransientParent;
 
   WindowObjectBuilder({
     int? objectId,
@@ -2284,6 +2290,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     bool? pet,
     int? petHolds,
     bool? petDragged,
+    bool? hiddenByTransientParent,
   })
       : _objectId = objectId,
         _objectKind = objectKind,
@@ -2335,7 +2342,8 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
         _petBelow = petBelow,
         _pet = pet,
         _petHolds = petHolds,
-        _petDragged = petDragged;
+        _petDragged = petDragged,
+        _hiddenByTransientParent = hiddenByTransientParent;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -2346,7 +2354,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeString(_appId!);
     final int? surfacesOffset = _surfaces == null ? null
         : fbBuilder.writeList(_surfaces!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
-    fbBuilder.startTable(51);
+    fbBuilder.startTable(52);
     fbBuilder.addUint64(0, _objectId);
     fbBuilder.addUint8(1, _objectKind?.value);
     fbBuilder.addUint64(2, _surfaceId);
@@ -2398,6 +2406,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     fbBuilder.addBool(48, _pet);
     fbBuilder.addUint32(49, _petHolds);
     fbBuilder.addBool(50, _petDragged);
+    fbBuilder.addBool(51, _hiddenByTransientParent);
     return fbBuilder.endTable();
   }
 

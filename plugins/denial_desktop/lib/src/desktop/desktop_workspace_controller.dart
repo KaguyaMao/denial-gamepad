@@ -251,7 +251,9 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       _moveRemainders.clear();
     }
 
-    final userWindows = windows.where((window) => window.isUserApp).toList();
+    final userWindows = windows
+        .where((window) => window.isPresentedUserApp)
+        .toList();
     final activeIds = {for (final window in userWindows) window.objectId};
     _transientParentObjectIds = <int, int>{
       for (final window in userWindows)
@@ -285,13 +287,13 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         }
         next[window.objectId] = DesktopWindowPlacement(
           objectId: window.objectId,
-          frame: window.fullscreen
+          frame: (window.fullscreen
               ? nativeGeometry.intersect(Offset.zero & viewSize)
               : _initialFrame(
                   nativeGeometry,
                   serverSideDecorated: window.serverSideDecorated,
                   expanded: window.maximized && !serverFrameWhileMaximized,
-                ),
+                )),
           z: nextZ++,
           monitorId: window.monitorId,
           workspaceId: window.workspaceId,
@@ -351,6 +353,15 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         }
         final decorationChanged =
             existing.serverSideDecorated != nativeServerSideDecorated;
+        // An edge drag publishes shrinking placement packets until the tile
+        // crosses the close threshold. The minimize snapshot carries the
+        // pre-drag rectangle and must win immediately, even while that
+        // placement transaction is still open.
+        final justBackgrounded =
+            metadataIsNew && window.minimized && !existing.minimized;
+        if (justBackgrounded) {
+          revisions.placementTransactionActive = false;
+        }
         // Rust owns geometry throughout a native grab. A presentation or
         // metadata snapshot (for example, an animating title) can carry the
         // latest native rectangle before Flutter receives the matching
@@ -358,19 +369,20 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         // rectangle with the retained live-move delta and visibly apply the
         // motion twice. Placement packets remain the only geometry authority
         // until their end phase commits the final frame.
-        if ((geometryIsNew ||
-                (windowLayoutChanged && !window.isLocalFlutter)) &&
+        if (nativeGeometry != null &&
             !existing.dragging &&
-            !revisions.placementTransactionActive &&
             !existing.layoutPreviewing &&
-            nativeGeometry != null) {
-          final nativeFrame = nativeFullscreen
+            (justBackgrounded ||
+                ((geometryIsNew ||
+                        (windowLayoutChanged && !window.isLocalFlutter)) &&
+                    !revisions.placementTransactionActive))) {
+          final nativeFrame = (nativeFullscreen
               ? nativeGeometry.intersect(Offset.zero & viewSize)
               : _initialFrame(
                   nativeGeometry,
                   serverSideDecorated: nativeServerSideDecorated,
                   expanded: nativeMaximized && !serverFrameWhileMaximized,
-                );
+                ));
           final pendingFrame = _pendingFlutterProposedFrames[window.objectId];
           final nativeAcknowledgedPending =
               pendingFrame != null &&
@@ -497,6 +509,9 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         nextOverview = null;
       } else if (workspaces != null) {
         nextOverview = _rearrangedWorkspaceOverview(next, nextOverview);
+      } else if (nextOverview.slots != null &&
+          nextOverview.sourceViewport != null) {
+        nextOverview = _rearrangedApplicationStrip(next, nextOverview);
       } else {
         final overviewItems = <DesktopOverviewItem>[
           for (final entry in nextOverview.frames.entries)
@@ -505,8 +520,11 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
                 objectId: entry.key,
                 // A scrolling space owns a stable column order. Buffer size,
                 // focus and minimize snapshots must not reshuffle its cards.
-                frame: _stripOverview ? entry.value : next[entry.key]!.frame,
+                frame: _stripOverview && !next[entry.key]!.minimized
+                    ? entry.value
+                    : next[entry.key]!.frame,
                 z: next[entry.key]!.z,
+                minimized: next[entry.key]!.minimized,
               ),
         ];
         final frames = Map<int, Rect>.of(
@@ -514,7 +532,6 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
             items: overviewItems,
             bounds: nextOverview.bounds,
             strip: _stripOverview,
-            stripAspectRatio: _stripOverviewAspect(nextOverview.bounds),
           ),
         );
         for (final placement in next.values) {
@@ -646,13 +663,13 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
             objectId: placement.objectId,
             frame: placement.frame,
             z: placement.z,
+            minimized: placement.minimized,
           ),
     ];
     final frames = DesktopOverviewLayout.arrange(
       items: items,
       bounds: bounds,
       strip: _stripOverview,
-      stripAspectRatio: _stripOverviewAspect(bounds),
     );
     if (frames.isEmpty) {
       return;
@@ -677,6 +694,117 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     );
   }
 
+  /// Opens the Gamepad application strip. Each window occupies one equal slot;
+  /// [sourceViewport] is the work area projected into that slot.
+  void openApplicationStripOverview({
+    required int monitorId,
+    required Rect bounds,
+    required Rect backgroundBounds,
+    required Rect sourceViewport,
+    Set<int>? objectIds,
+    int? selectedObjectId,
+  }) {
+    if (state.overviewActive || bounds.isEmpty || sourceViewport.isEmpty) {
+      return;
+    }
+    _stripOverview = true;
+    _moveRemainders.clear();
+    _overviewDragOrigins.clear();
+    final settledPlacements = <int, DesktopWindowPlacement>{
+      for (final placement in state.placements.values)
+        placement.objectId: placement.dragging
+            ? placement.copyWith(dragging: false)
+            : placement,
+    };
+    final items = <DesktopOverviewItem>[
+      for (final placement in settledPlacements.values)
+        if (objectIds?.contains(placement.objectId) ?? false)
+          DesktopOverviewItem(
+            objectId: placement.objectId,
+            frame: placement.frame,
+            z: placement.z,
+            workspaceId: placement.workspaceId,
+            minimized: placement.minimized,
+          ),
+    ];
+    final arrangement = DesktopOverviewLayout.arrangeUniformStrip(
+      items: items,
+      bounds: bounds,
+      sourceViewport: sourceViewport,
+    );
+    if (arrangement == null) {
+      return;
+    }
+    final fallbackSelection = items
+        .reduce((left, right) => left.z >= right.z ? left : right)
+        .objectId;
+    state = state.copyWith(
+      placements: settledPlacements,
+      panel: DesktopPanel.none,
+      overview: DesktopOverviewState(
+        monitorId: monitorId,
+        bounds: bounds,
+        backgroundBounds: backgroundBounds,
+        selectedObjectId: arrangement.frames.containsKey(selectedObjectId)
+            ? selectedObjectId!
+            : fallbackSelection,
+        frames: arrangement.frames,
+        slots: arrangement.slots,
+        sourceViewport: sourceViewport,
+      ),
+    );
+  }
+
+  DesktopOverviewState? _rearrangedApplicationStrip(
+    Map<int, DesktopWindowPlacement> placements,
+    DesktopOverviewState overview,
+  ) {
+    final sourceViewport = overview.sourceViewport;
+    if (sourceViewport == null) {
+      return overview;
+    }
+    final items = <DesktopOverviewItem>[
+      for (final objectId in overview.frames.keys)
+        if (placements[objectId] case final placement?)
+          DesktopOverviewItem(
+            objectId: objectId,
+            frame: placement.frame,
+            z: placement.z,
+            workspaceId: placement.workspaceId,
+            minimized: placement.minimized,
+          ),
+    ];
+    final arrangement = DesktopOverviewLayout.arrangeUniformStrip(
+      items: items,
+      bounds: overview.bounds,
+      sourceViewport: sourceViewport,
+    );
+    if (arrangement == null) {
+      return null;
+    }
+    final selected = arrangement.frames.containsKey(overview.selectedObjectId)
+        ? overview.selectedObjectId
+        : _nearestOverviewObjectId(
+            arrangement.slots,
+            overview.slots?[overview.selectedObjectId]?.center ??
+                overview.frames[overview.selectedObjectId]?.center,
+          );
+    final rebuilt = DesktopOverviewState(
+      monitorId: overview.monitorId,
+      bounds: overview.bounds,
+      backgroundBounds: overview.backgroundBounds,
+      selectedObjectId: selected,
+      frames: arrangement.frames,
+      slots: arrangement.slots,
+      sourceViewport: sourceViewport,
+      scrollOffset: overview.scrollOffset,
+    );
+    final extent = _overviewStripExtent(rebuilt);
+    return rebuilt.copyWith(
+      scrollOffset: rebuilt.scrollOffset.clamp(-extent, 0.0).toDouble(),
+    );
+  }
+
   /// Opens the managed-layout overview: every workspace of [monitorId] as a
   /// true-to-layout card, with minimized windows on a shelf below.
   ///
@@ -688,6 +816,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     required Rect backgroundBounds,
     required Rect viewport,
     required WorkspaceSwitchingOrientation orientation,
+    bool? stripOverview,
     int? selectedObjectId,
   }) {
     if (state.overviewActive || bounds.isEmpty || viewport.isEmpty) {
@@ -696,6 +825,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     _moveRemainders.clear();
     _overviewDragOrigins.clear();
     _clearOverviewDropPreview();
+    final strip = stripOverview ?? _stripOverview;
     final settledPlacements = <int, DesktopWindowPlacement>{
       for (final placement in state.placements.values)
         placement.objectId: placement.dragging
@@ -709,6 +839,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       backgroundBounds: backgroundBounds,
       viewport: viewport,
       orientation: orientation,
+      strip: strip,
       selectedObjectId: selectedObjectId,
     );
     if (overview == null) {
@@ -728,8 +859,10 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     required Rect backgroundBounds,
     required Rect viewport,
     required WorkspaceSwitchingOrientation orientation,
+    required bool strip,
     required int? selectedObjectId,
     Map<int, Rect> retainedFrames = const <int, Rect>{},
+    double? retainedScrollOffset,
   }) {
     final count = state.workspacesEnabled ? state.workspaceCount : 1;
     final activeWorkspace = state.activeWorkspaceFor(monitorId);
@@ -739,7 +872,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         if ((placement.monitorId == monitorId ||
                 (placement.monitorId < 0 &&
                     backgroundBounds.contains(placement.frame.center))) &&
-            DesktopOverviewLayout.isUsefulPreview(placement.frame))
+            !placement.frame.isEmpty)
           DesktopWorkspaceOverviewItem(
             objectId: placement.objectId,
             frame:
@@ -759,6 +892,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       workspaceCount: count,
       orientation: orientation,
       items: items,
+      strip: strip,
       landing:
           slot == null ||
               slot.workspaceId < 1 ||
@@ -770,6 +904,13 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     if (arrangement.cards.isEmpty) {
       return null;
     }
+    final scrollOffset = _workspaceOverviewScrollOffset(
+      bounds: bounds,
+      cards: arrangement.cards,
+      strip: strip,
+      workspaceId: activeWorkspace,
+      requested: retainedScrollOffset,
+    );
     final frames = Map<int, Rect>.of(arrangement.frames);
     for (final entry in retainedFrames.entries) {
       if (frames.containsKey(entry.key)) {
@@ -784,11 +925,13 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
           ? selectedObjectId
           : _preferredOverviewSelection(items, frames, activeWorkspace),
       frames: frames,
+      scrollOffset: scrollOffset,
       workspaces: DesktopWorkspaceOverview(
         viewport: viewport,
         orientation: orientation,
         cards: arrangement.cards,
         shelf: arrangement.shelf,
+        strip: strip,
         dropSlot: arrangement.landing,
       ),
     );
@@ -808,22 +951,54 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       backgroundBounds: previous.backgroundBounds,
       viewport: workspaces.viewport,
       orientation: workspaces.orientation,
+      strip: workspaces.strip,
       selectedObjectId: previous.selectedObjectId,
       retainedFrames: <int, Rect>{
         for (final placement in placements.values)
           if (placement.dragging)
             placement.objectId: ?previous.frames[placement.objectId],
       },
+      retainedScrollOffset: previous.scrollOffset,
     );
+  }
+
+  double _workspaceOverviewScrollOffset({
+    required Rect bounds,
+    required List<DesktopWorkspaceOverviewCard> cards,
+    required bool strip,
+    required int workspaceId,
+    required double? requested,
+  }) {
+    if (!strip || cards.isEmpty) {
+      return 0.0;
+    }
+    final right = cards.fold<double>(
+      bounds.left,
+      (value, card) => math.max(value, card.rect.right),
+    );
+    final extent = math.max(0.0, right - bounds.right);
+    final active = cards.firstWhere(
+      (card) => card.workspaceId == workspaceId,
+      orElse: () => cards.first,
+    );
+    final desired = requested ?? bounds.center.dx - active.rect.center.dx;
+    return desired.clamp(-extent, 0.0).toDouble();
   }
 
   /// Resolves the workspace card under [objectId]'s dragged preview and the
   /// preview centre in that workspace's own scene coordinates. The native
   /// layout preview answering this plan is presented on that card.
   ({int workspaceId, Offset point})? planOverviewDrop(int objectId) {
-    final workspaces = state.overview?.workspaces;
-    final preview = state.overview?.frames[objectId];
-    final card = preview == null ? null : workspaces?.cardAt(preview.center);
+    final overview = state.overview;
+    final workspaces = overview?.workspaces;
+    final preview = overview?.frames[objectId];
+    final scrollOffset = overview?.scrollOffset ?? 0.0;
+    final visualCenter = preview == null
+        ? null
+        : preview.center + Offset(scrollOffset, 0.0);
+    final card = preview == null
+        ? null
+        : workspaces?.cardAt(visualCenter!, scrollOffset: scrollOffset);
     final dragging = state.placements[objectId]?.dragging ?? false;
     _overviewDropWorkspace = dragging ? card?.workspaceId : null;
     if (!dragging || card == null) {
@@ -964,7 +1139,9 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       backgroundBounds: overview.backgroundBounds,
       viewport: overview.workspaces!.viewport,
       orientation: overview.workspaces!.orientation,
+      strip: overview.workspaces!.strip,
       selectedObjectId: objectId,
+      retainedScrollOffset: overview.scrollOffset,
     );
     state = state.copyWith(placements: next, overview: rearranged ?? overview);
     return true;
@@ -990,7 +1167,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       return true;
     }
     final selectedObjectId = desktopOverviewNeighbor(
-      frames: overview.frames,
+      frames: overview.slots ?? overview.frames,
       fromObjectId: fromObjectId,
       direction: direction,
     );
@@ -1044,6 +1221,27 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     if (overview == null) {
       return;
     }
+    if (overview.workspaces?.strip == true) {
+      final content = _overviewStripExtent(overview);
+      final next =
+          (overview.scrollOffset +
+                  delta.dx * DesktopMetrics.touchOverviewScrollGain)
+              .clamp(-content, 0.0)
+              .toDouble();
+      if (next != overview.scrollOffset) {
+        // Scrolling only translates the miniature plane; native window
+        // regions are unchanged, so do not wake the input publisher per tick.
+        state = state.copyWith(
+          overview: overview.copyWith(scrollOffset: next),
+          bumpInputLayoutRevision: false,
+        );
+      }
+      return;
+    }
+    // Pointer-oriented workspace cards are dragged individually.
+    if (overview.workspaces != null) {
+      return;
+    }
     if (_stripOverview) {
       // The strip scrolls as a whole; cards never rearrange individually.
       final content = _overviewStripExtent(overview);
@@ -1076,20 +1274,20 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
   }
 
   double _overviewStripExtent(DesktopOverviewState overview) {
+    final workspaces = overview.workspaces;
+    if (workspaces?.strip == true) {
+      var right = overview.bounds.left;
+      for (final card in workspaces!.cards) {
+        right = math.max(right, card.rect.right);
+      }
+      return math.max(0.0, right - overview.bounds.right);
+    }
+    final slots = overview.slots;
     var right = overview.bounds.left;
-    for (final frame in overview.frames.values) {
+    for (final frame in (slots ?? overview.frames).values) {
       right = math.max(right, frame.right);
     }
     return math.max(0.0, right - overview.bounds.right);
-  }
-
-  /// The exclusive-application shape used by every touch strip card, so a
-  /// split pane is not drawn as a narrow sliver.
-  double? _stripOverviewAspect(Rect bounds) {
-    if (!_stripOverview || bounds.height <= 0.0) {
-      return null;
-    }
-    return (bounds.width / bounds.height).clamp(0.32, 3.6).toDouble();
   }
 
   bool endOverviewDrag(

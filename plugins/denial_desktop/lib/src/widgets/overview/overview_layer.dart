@@ -418,7 +418,7 @@ class _OverviewLayerState extends State<OverviewLayer>
 
   double _referenceTravel(Size size) {
     final window = widget.foregroundWindow;
-    if (window == null || !window.isUserApp) {
+    if (window == null || !window.isPresentedUserApp) {
       return size.height * 0.45;
     }
     return math.max(1.0, size.height - _cardRectFor(size).bottom);
@@ -427,7 +427,7 @@ class _OverviewLayerState extends State<OverviewLayer>
   DenialWindow? _foregroundHeroWindow(double progress) {
     final window = widget.foregroundWindow;
     if (window == null ||
-        !window.isUserApp ||
+        !window.isPresentedUserApp ||
         progress <= 0 ||
         (progress >= 1 && !_heroPressed)) {
       return null;

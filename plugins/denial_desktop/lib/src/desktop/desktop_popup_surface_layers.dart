@@ -23,6 +23,7 @@ class DesktopPopupSurfaceLayers extends StatelessWidget {
     required this.offscreenMinimized,
     required this.overviewActive,
     required this.overview,
+    this.overviewScrollOffset = 0.0,
     required this.switching,
     required this.motionDuration,
   });
@@ -34,6 +35,7 @@ class DesktopPopupSurfaceLayers extends StatelessWidget {
   final bool offscreenMinimized;
   final bool overviewActive;
   final bool overview;
+  final double overviewScrollOffset;
   final bool switching;
   final Duration motionDuration;
 
@@ -150,6 +152,7 @@ class DesktopPopupSurfaceLayers extends StatelessWidget {
                             : null,
                         placementObjectId: placement.objectId,
                         overview: overview,
+                        overviewScrollOffset: overviewScrollOffset,
                         switching: switching,
                         offscreenMinimized: offscreenMinimized,
                         dragging: placement.dragging,

@@ -351,7 +351,7 @@ class _DesktopInputLayoutPublisherState
         continue;
       }
       final window = windowsById[placement.objectId];
-      if (window == null) {
+      if (window == null || !window.isPresentedUserApp) {
         continue;
       }
       visibleSurfaceIds.addAll(window.mainVisibleSurfaceIds);

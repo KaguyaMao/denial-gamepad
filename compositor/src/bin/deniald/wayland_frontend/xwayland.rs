@@ -727,6 +727,8 @@ fn unmap_x11_window(state: &mut RuntimeState, surface: &X11Surface) {
         let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
         #[cfg(feature = "flutter")]
         frontend.invalidate_window_input_routes(&window);
+        #[cfg(feature = "flutter")]
+        frontend.mark_transient_children_orphaned(&window);
         let was_layout_managed = frontend.window_is_layout_managed(&window);
         frontend.remove_window_from_layout(&window, true);
         if !was_layout_managed {

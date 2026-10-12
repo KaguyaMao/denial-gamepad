@@ -578,12 +578,11 @@ class _ColorModeTab extends StatelessWidget {
       child: TextButton(
         onPressed: onPressed,
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll<Size>(Size(42, 26)),
-          visualDensity: VisualDensity.compact,
+          minimumSize: const WidgetStatePropertyAll<Size>(Size(48, 48)),
           padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
             EdgeInsets.symmetric(horizontal: 8),
           ),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          tapTargetSize: MaterialTapTargetSize.padded,
           backgroundColor: WidgetStatePropertyAll<Color>(
             selected
                 ? ShellTheme.of(context).accent.withAlpha(36)

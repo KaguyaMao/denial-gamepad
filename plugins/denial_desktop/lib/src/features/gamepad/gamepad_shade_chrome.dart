@@ -8,7 +8,7 @@ import '../../desktop/desktop_workspace.dart';
 import '../../state/reference_shell_metrics.dart';
 import '../../widgets/shade/system_shade_layer.dart';
 
-/// Touch Dock strip height, mirroring native `GAMEPAD_SYSTEM_BAR_THICKNESS`.
+/// Height of the Dock overlay above the Gamepad quick-settings shade.
 const double _gamepadDockHeight = 51.0;
 
 /// Profile chrome for the touch-first desktop shell.

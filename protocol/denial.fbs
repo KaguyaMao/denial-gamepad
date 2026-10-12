@@ -438,6 +438,11 @@ table Window {
   pet:bool;
   pet_holds:uint;
   pet_dragged:bool;
+  // The window is still mapped and is not independently minimized, but an
+  // ancestor transient parent is minimized. Receivers must hide it without
+  // placing it on the independent minimized-window shelf. Appended after
+  // main's pet fields so those slots stay stable.
+  hidden_by_transient_parent:bool;
 }
 
 table WindowSnapshot {

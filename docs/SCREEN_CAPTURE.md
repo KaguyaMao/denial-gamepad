@@ -57,8 +57,9 @@ itself.
 
 At its first ready frame, Denial activates the packaged
 `denial-session.target`, which binds the standard systemd
-`graphical-session.target`. Portal activation is deliberately gated on that
-ready point so a backend never inherits an unset or stale Wayland socket.
+`graphical-session.target` and starts `xdg-desktop-portal-wlr.service`. Portal
+activation is deliberately gated on that ready point so the backend inherits
+the live Wayland socket and OBS can see the ScreenCast source types immediately.
 
 Because the default `xdg-desktop-portal-wlr` chooser starts `slurp`, Denial
 provides a Zenity chooser instead. Zenity uses a regular xdg-shell window and

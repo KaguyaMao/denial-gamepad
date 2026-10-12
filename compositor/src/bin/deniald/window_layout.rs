@@ -6,6 +6,7 @@
 //! returned rectangles. A new layout therefore only needs to implement
 //! [`WindowLayout`] and be added to [`create_window_layout`].
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -213,6 +214,18 @@ where
     /// mutating authoritative compositor state.
     fn snapshot(&self) -> Box<dyn WindowLayout<WindowId>>;
 
+    /// Capture one layout space for a transactional interactive operation.
+    /// Layouts without per-space mutable trees can keep the default.
+    fn snapshot_space(&self, _space: LayoutSpace) -> Option<Box<dyn Any>> {
+        None
+    }
+
+    /// Restore one space only if its leaf membership still matches the
+    /// snapshot. Concurrent window changes are never discarded by rollback.
+    fn restore_space(&mut self, _space: LayoutSpace, _snapshot: &dyn Any) -> bool {
+        false
+    }
+
     fn kind(&self) -> WindowLayoutKind;
 
     /// Stacking leaves geometry under the existing free-placement policy.
@@ -223,6 +236,17 @@ where
     fn insert(&mut self, insertion: LayoutInsertion<WindowId>);
     fn remove(&mut self, window: &WindowId) -> bool;
     fn contains(&self, window: &WindowId) -> bool;
+    /// A minimized managed leaf can retain its split slot without taking space
+    /// from the currently visible leaves.
+    fn is_suspended(&self, _window: &WindowId) -> bool {
+        false
+    }
+    fn suspend_window(&mut self, _window: &WindowId) -> bool {
+        false
+    }
+    fn restore_window(&mut self, _window: &WindowId) -> bool {
+        false
+    }
     fn space_for(&self, window: &WindowId) -> Option<LayoutSpace>;
     fn clear(&mut self);
 
@@ -598,6 +622,12 @@ struct DwindleLayout<WindowId> {
     minimum_sizes: Vec<(WindowId, Size<i32, Logical>)>,
 }
 
+#[derive(Clone, Debug)]
+struct DwindleSpaceSnapshot<WindowId> {
+    root: DwindleNode<WindowId>,
+    minimum_sizes: Vec<(WindowId, Size<i32, Logical>)>,
+}
+
 impl<WindowId> Default for DwindleLayout<WindowId> {
     fn default() -> Self {
         Self {
@@ -610,6 +640,7 @@ impl<WindowId> Default for DwindleLayout<WindowId> {
 #[derive(Clone, Debug)]
 enum DwindleNode<WindowId> {
     Window(WindowId),
+    Suspended(WindowId),
     Split {
         /// Interactive edge drops pin the requested axis. Ordinary dwindle
         /// insertion remains adaptive and derives its axis from the parent.
@@ -633,14 +664,71 @@ where
 {
     fn contains(&self, window: &WindowId) -> bool {
         match self {
-            Self::Window(candidate) => candidate == window,
+            Self::Window(candidate) | Self::Suspended(candidate) => candidate == window,
             Self::Split { first, second, .. } => first.contains(window) || second.contains(window),
+        }
+    }
+
+    fn contains_active(&self, window: &WindowId) -> bool {
+        match self {
+            Self::Window(candidate) => candidate == window,
+            Self::Suspended(_) => false,
+            Self::Split { first, second, .. } => {
+                first.contains_active(window) || second.contains_active(window)
+            }
+        }
+    }
+
+    fn active_leaf_count(&self) -> usize {
+        match self {
+            Self::Window(_) => 1,
+            Self::Suspended(_) => 0,
+            Self::Split { first, second, .. } => {
+                first.active_leaf_count() + second.active_leaf_count()
+            }
+        }
+    }
+
+    fn last_active_window(&self) -> Option<&WindowId> {
+        match self {
+            Self::Window(window) => Some(window),
+            Self::Suspended(_) => None,
+            Self::Split { first, second, .. } => second
+                .last_active_window()
+                .or_else(|| first.last_active_window()),
+        }
+    }
+
+    fn is_suspended(&self, window: &WindowId) -> bool {
+        match self {
+            Self::Suspended(candidate) => candidate == window,
+            Self::Window(_) => false,
+            Self::Split { first, second, .. } => {
+                first.is_suspended(window) || second.is_suspended(window)
+            }
+        }
+    }
+
+    fn set_suspended(&mut self, window: &WindowId, suspended: bool) -> bool {
+        match self {
+            Self::Window(candidate) if candidate == window && suspended => {
+                *self = Self::Suspended(candidate.clone());
+                true
+            }
+            Self::Suspended(candidate) if candidate == window && !suspended => {
+                *self = Self::Window(candidate.clone());
+                true
+            }
+            Self::Window(_) | Self::Suspended(_) => false,
+            Self::Split { first, second, .. } => {
+                first.set_suspended(window, suspended) || second.set_suspended(window, suspended)
+            }
         }
     }
 
     fn last_window(&self) -> &WindowId {
         match self {
-            Self::Window(window) => window,
+            Self::Window(window) | Self::Suspended(window) => window,
             Self::Split { second, .. } => second.last_window(),
         }
     }
@@ -648,6 +736,7 @@ where
     fn window_ids(&self) -> Vec<WindowId> {
         match self {
             Self::Window(window) => vec![window.clone()],
+            Self::Suspended(window) => vec![window.clone()],
             Self::Split { first, second, .. } => {
                 let mut windows = first.window_ids();
                 windows.extend(second.window_ids());
@@ -659,6 +748,7 @@ where
     fn leaf_count(&self) -> usize {
         match self {
             Self::Window(_) => 1,
+            Self::Suspended(_) => 1,
             Self::Split { first, second, .. } => first.leaf_count() + second.leaf_count(),
         }
     }
@@ -666,6 +756,7 @@ where
     fn retained(self, keep: &impl Fn(&WindowId) -> bool) -> Option<Self> {
         match self {
             Self::Window(window) => keep(&window).then_some(Self::Window(window)),
+            Self::Suspended(window) => keep(&window).then_some(Self::Suspended(window)),
             Self::Split {
                 axis,
                 ratio,
@@ -696,6 +787,7 @@ where
                 };
                 true
             }
+            Self::Suspended(_) => false,
             Self::Window(_) => false,
             Self::Split { first, second, .. } => {
                 first.split_window(anchor, window.clone()) || second.split_window(anchor, window)
@@ -725,6 +817,7 @@ where
                 };
                 true
             }
+            Self::Suspended(_) => false,
             Self::Window(_) => false,
             Self::Split { first, second, .. } => {
                 first.split_window_beside(anchor, window.clone(), direction)
@@ -740,6 +833,13 @@ where
                     (None, true)
                 } else {
                     (Some(Self::Window(candidate)), false)
+                }
+            }
+            Self::Suspended(candidate) => {
+                if &candidate == window {
+                    (None, true)
+                } else {
+                    (Some(Self::Suspended(candidate)), false)
                 }
             }
             Self::Split {
@@ -799,12 +899,21 @@ where
     ) -> Size<i32, Logical> {
         match self {
             Self::Window(window) => layout_minimum_size(minimum_sizes, window),
+            Self::Suspended(_) => Size::from((1, 1)),
             Self::Split {
                 axis,
                 ratio,
                 first,
                 second,
             } => {
+                let first_active = first.active_leaf_count() > 0;
+                let second_active = second.active_leaf_count() > 0;
+                match (first_active, second_active) {
+                    (true, false) => return first.minimum_size(geometry, gap, minimum_sizes),
+                    (false, true) => return second.minimum_size(geometry, gap, minimum_sizes),
+                    (false, false) => return Size::from((1, 1)),
+                    (true, true) => {}
+                }
                 let axis = resolved_split_axis(*axis, geometry);
                 let (first_geometry, second_geometry) =
                     split_geometry_on_axis(geometry, gap, *ratio, axis);
@@ -842,12 +951,27 @@ where
                 window: window.clone(),
                 geometry,
             }),
+            Self::Suspended(_) => {}
             Self::Split {
                 axis,
                 ratio,
                 first,
                 second,
             } => {
+                let first_active = first.active_leaf_count() > 0;
+                let second_active = second.active_leaf_count() > 0;
+                match (first_active, second_active) {
+                    (true, false) => {
+                        first.arrange(geometry, gap, minimum_sizes, placements);
+                        return;
+                    }
+                    (false, true) => {
+                        second.arrange(geometry, gap, minimum_sizes, placements);
+                        return;
+                    }
+                    (false, false) => return,
+                    (true, true) => {}
+                }
                 let axis = resolved_split_axis(*axis, geometry);
                 let (unconstrained_first, unconstrained_second) =
                     split_geometry_on_axis(geometry, gap, *ratio, axis);
@@ -886,6 +1010,31 @@ where
         else {
             return ResizedAxes::default();
         };
+        let first_active = first.active_leaf_count() > 0;
+        let second_active = second.active_leaf_count() > 0;
+        if first_active != second_active {
+            return if first_active {
+                first.resize_window(
+                    window,
+                    geometry,
+                    gap,
+                    edges,
+                    delta_x,
+                    delta_y,
+                    minimum_ratio,
+                )
+            } else {
+                second.resize_window(
+                    window,
+                    geometry,
+                    gap,
+                    edges,
+                    delta_x,
+                    delta_y,
+                    minimum_ratio,
+                )
+            };
+        }
         let window_in_first = first.contains(window);
         let window_in_second = !window_in_first && second.contains(window);
         if !window_in_first && !window_in_second {
@@ -969,6 +1118,19 @@ where
         else {
             return;
         };
+        let first_active = first.active_leaf_count() > 0;
+        let second_active = second.active_leaf_count() > 0;
+        if first_active != second_active {
+            if first_active {
+                first.retain_split_axes(geometry, gap, minimum_sizes);
+            } else {
+                second.retain_split_axes(geometry, gap, minimum_sizes);
+            }
+            return;
+        }
+        if !first_active {
+            return;
+        }
         let resolved = resolved_split_axis(*axis, geometry);
         let (raw_first, raw_second) = split_geometry_on_axis(geometry, gap, *ratio, resolved);
         let (first_geometry, second_geometry) = split_geometry_on_axis_with_minimums(
@@ -1001,6 +1163,18 @@ where
         else {
             return None;
         };
+        let first_active = first.active_leaf_count() > 0;
+        let second_active = second.active_leaf_count() > 0;
+        if first_active != second_active {
+            return if first_active {
+                first.resize_from_keyboard(request, geometry, minimum_sizes)
+            } else {
+                second.resize_from_keyboard(request, geometry, minimum_sizes)
+            };
+        }
+        if !first_active {
+            return None;
+        }
         let in_first = first.contains(&request.window);
         if !in_first && !second.contains(&request.window) {
             return None;
@@ -1050,6 +1224,7 @@ where
             Self::Window(window) if window == first => *window = second.clone(),
             Self::Window(window) if window == second => *window = first.clone(),
             Self::Window(_) => {}
+            Self::Suspended(_) => {}
             Self::Split {
                 first: first_child,
                 second: second_child,
@@ -1070,6 +1245,43 @@ where
         Box::new(self.clone())
     }
 
+    fn snapshot_space(&self, space: LayoutSpace) -> Option<Box<dyn Any>> {
+        let root = self.roots.get(&space)?.clone();
+        let window_ids = root.window_ids();
+        let minimum_sizes = self
+            .minimum_sizes
+            .iter()
+            .filter(|(window, _)| window_ids.contains(window))
+            .cloned()
+            .collect();
+        Some(Box::new(DwindleSpaceSnapshot {
+            root,
+            minimum_sizes,
+        }))
+    }
+
+    fn restore_space(&mut self, space: LayoutSpace, snapshot: &dyn Any) -> bool {
+        let Some(snapshot) = snapshot.downcast_ref::<DwindleSpaceSnapshot<WindowId>>() else {
+            return false;
+        };
+        let Some(current) = self.roots.get(&space) else {
+            return false;
+        };
+        let saved_ids = snapshot.root.window_ids();
+        let current_ids = current.window_ids();
+        if current_ids.len() != saved_ids.len()
+            || current_ids.iter().any(|window| !saved_ids.contains(window))
+        {
+            return false;
+        }
+        self.roots.insert(space, snapshot.root.clone());
+        self.minimum_sizes
+            .retain(|(window, _)| !saved_ids.contains(window));
+        self.minimum_sizes
+            .extend(snapshot.minimum_sizes.iter().cloned());
+        true
+    }
+
     fn kind(&self) -> WindowLayoutKind {
         WindowLayoutKind::Dwindle
     }
@@ -1081,10 +1293,21 @@ where
                 .insert(insertion.space, DwindleNode::Window(insertion.window));
             return;
         };
+        if root.active_leaf_count() == 0 {
+            let previous = std::mem::replace(root, DwindleNode::Window(insertion.window.clone()));
+            *root = DwindleNode::Split {
+                axis: None,
+                ratio: 0.5,
+                first: Box::new(previous),
+                second: Box::new(DwindleNode::Window(insertion.window)),
+            };
+            return;
+        }
         let anchor = insertion
             .anchor
-            .filter(|anchor| root.contains(anchor))
-            .unwrap_or_else(|| root.last_window().clone());
+            .filter(|anchor| root.contains_active(anchor))
+            .or_else(|| root.last_active_window().cloned())
+            .expect("an active Dwindle tree has an active leaf");
         let inserted = root.split_window(&anchor, insertion.window);
         debug_assert!(inserted, "dwindle insertion anchor must exist");
     }
@@ -1113,6 +1336,22 @@ where
         self.roots.values().any(|root| root.contains(window))
     }
 
+    fn is_suspended(&self, window: &WindowId) -> bool {
+        self.roots.values().any(|root| root.is_suspended(window))
+    }
+
+    fn suspend_window(&mut self, window: &WindowId) -> bool {
+        self.roots
+            .values_mut()
+            .any(|root| root.set_suspended(window, true))
+    }
+
+    fn restore_window(&mut self, window: &WindowId) -> bool {
+        self.roots
+            .values_mut()
+            .any(|root| root.set_suspended(window, false))
+    }
+
     fn space_for(&self, window: &WindowId) -> Option<LayoutSpace> {
         self.roots
             .iter()
@@ -1130,7 +1369,10 @@ where
     }
 
     fn swap(&mut self, first: &WindowId, second: &WindowId, _preserve_sizes: bool) -> bool {
-        if first == second || !self.contains(first) || !self.contains(second) {
+        if first == second
+            || !self.roots.values().any(|root| root.contains_active(first))
+            || !self.roots.values().any(|root| root.contains_active(second))
+        {
             return false;
         }
         for root in self.roots.values_mut() {
@@ -1145,7 +1387,10 @@ where
         target: &WindowId,
         direction: LayoutDirection,
     ) -> bool {
-        if window == target || !self.contains(window) || !self.contains(target) {
+        if window == target
+            || !self.roots.values().any(|root| root.contains_active(window))
+            || !self.roots.values().any(|root| root.contains_active(target))
+        {
             return false;
         }
         let source_space = self
@@ -1189,7 +1434,7 @@ where
         let Some(root) = self
             .roots
             .values_mut()
-            .find(|root| root.contains(&request.window))
+            .find(|root| root.contains_active(&request.window))
         else {
             return false;
         };
@@ -1213,7 +1458,7 @@ where
         let Some(root) = self
             .roots
             .values_mut()
-            .find(|root| root.contains(&request.window))
+            .find(|root| root.contains_active(&request.window))
         else {
             return false;
         };
@@ -2997,6 +3242,122 @@ mod tests {
     }
 
     #[test]
+    fn dwindle_suspension_expands_remaining_tiles_and_restores_the_saved_split() {
+        let mut layout = DwindleLayout::<u64>::default();
+        layout.insert(LayoutInsertion {
+            window: 1,
+            space: OUTPUT,
+            anchor: None,
+        });
+        layout.insert(LayoutInsertion {
+            window: 2,
+            space: OUTPUT,
+            anchor: Some(1),
+        });
+        let area = rect(0, 0, 1000, 600);
+        assert!(layout.resize(LayoutResizeRequest {
+            window: 1,
+            work_area: area,
+            gap: 10,
+            delta_x: -180.0,
+            delta_y: 0.0,
+            edges: LayoutResizeEdges {
+                right: true,
+                ..LayoutResizeEdges::default()
+            },
+            minimum_ratio: 0.1,
+        }));
+        let before = layout.arrange(OUTPUT, area, 10);
+
+        assert!(layout.suspend_window(&1));
+        assert!(layout.is_suspended(&1));
+        assert_eq!(
+            layout.arrange(OUTPUT, area, 10),
+            vec![LayoutPlacement {
+                window: 2,
+                geometry: area,
+            }],
+            "a suspended split leaf gives its space to the visible sibling",
+        );
+
+        assert!(layout.restore_window(&1));
+        assert!(!layout.is_suspended(&1));
+        assert_eq!(
+            layout.arrange(OUTPUT, area, 10),
+            before,
+            "the retained split ratio restores the original tile dimensions",
+        );
+    }
+
+    #[test]
+    fn inserting_into_an_all_suspended_dwindle_space_keeps_new_window_full_size() {
+        let mut layout = DwindleLayout::<u64>::default();
+        layout.insert(LayoutInsertion {
+            window: 1,
+            space: OUTPUT,
+            anchor: None,
+        });
+        assert!(layout.suspend_window(&1));
+        layout.insert(LayoutInsertion {
+            window: 2,
+            space: OUTPUT,
+            anchor: None,
+        });
+        let area = rect(0, 0, 1000, 600);
+        assert_eq!(
+            layout.arrange(OUTPUT, area, 10),
+            vec![LayoutPlacement {
+                window: 2,
+                geometry: area,
+            }],
+        );
+        assert!(layout.restore_window(&1));
+        assert_eq!(layout.arrange(OUTPUT, area, 10).len(), 2);
+    }
+
+    #[test]
+    fn dwindle_resize_rollback_restores_only_its_space_and_rejects_membership_changes() {
+        let mut layout = DwindleLayout::<u64>::default();
+        for (window, space) in [(1, OUTPUT), (2, OUTPUT), (3, SECOND_OUTPUT)] {
+            layout.insert(LayoutInsertion {
+                window,
+                space,
+                anchor: None,
+            });
+        }
+        let area = rect(0, 0, 1000, 600);
+        let other_area = rect(1000, 0, 800, 600);
+        let before = layout.arrange(OUTPUT, area, 10);
+        let other_before = layout.arrange(SECOND_OUTPUT, other_area, 10);
+        let snapshot = layout.snapshot_space(OUTPUT).unwrap();
+
+        assert!(layout.resize(LayoutResizeRequest {
+            window: 1,
+            work_area: area,
+            gap: 10,
+            delta_x: -160.0,
+            delta_y: 0.0,
+            edges: LayoutResizeEdges {
+                right: true,
+                ..LayoutResizeEdges::default()
+            },
+            minimum_ratio: 0.1,
+        }));
+        assert!(layout.restore_space(OUTPUT, snapshot.as_ref()));
+        assert_eq!(layout.arrange(OUTPUT, area, 10), before);
+        assert_eq!(layout.arrange(SECOND_OUTPUT, other_area, 10), other_before);
+
+        let changed_membership = layout.snapshot_space(OUTPUT).unwrap();
+        layout.insert(LayoutInsertion {
+            window: 4,
+            space: OUTPUT,
+            anchor: Some(1),
+        });
+        assert!(!layout.restore_space(OUTPUT, changed_membership.as_ref()));
+        assert!(layout.contains(&4));
+    }
+
+    #[test]
     fn dwindle_respects_minimum_widths_when_they_fit() {
         let mut layout = DwindleLayout::<u64>::default();
         layout.insert(LayoutInsertion {
@@ -4462,6 +4823,7 @@ mod tests {
                         ..Default::default()
                     }
                 },
+                minimum_ratio: 0.1,
             };
             assert!(!layout.resize(request.clone()));
             assert_eq!(layout.arrange(OUTPUT, area, 10), original);
@@ -4563,6 +4925,7 @@ mod tests {
                         ..Default::default()
                     }
                 },
+                minimum_ratio: 0.1,
             }));
             assert_eq!(
                 cross.main_extent(layout.arrange(OUTPUT, area, 10)[0].geometry),

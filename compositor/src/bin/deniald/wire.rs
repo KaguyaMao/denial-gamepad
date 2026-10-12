@@ -655,6 +655,7 @@ pub struct WindowDescription {
     pub workspace_id: i64,
     pub transient_parent_id: u64,
     pub minimized: bool,
+    pub hidden_by_transient_parent: bool,
     pub fullscreen: bool,
     pub maximized: bool,
     pub pinned: bool,

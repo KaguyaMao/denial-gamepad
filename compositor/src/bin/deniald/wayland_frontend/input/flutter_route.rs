@@ -1354,7 +1354,9 @@ pub(super) fn begin_super_pointer_grab(
                         .window_root_surface(&window)
                         .and_then(|root| frontend.surface_id(&root))
                 {
-                    frontend.snapshot_gamepad_single_geometry(window_id);
+                    // Capture each tile in the workspace so an eviction can
+                    // restore its previous size instead of the squeezed sliver.
+                    frontend.snapshot_gamepad_resize_geometry(window_id);
                 }
                 pointer.set_grab(
                     state,

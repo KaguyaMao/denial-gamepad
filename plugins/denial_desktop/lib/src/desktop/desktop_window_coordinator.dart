@@ -68,7 +68,7 @@ final desktopWindowCoordinatorProvider = Provider<void>((ref) {
     if (target == null) {
       return false;
     }
-    return !target.isUserApp ||
+    return !target.isPresentedUserApp ||
         ref
             .read(desktopWorkspaceProvider)
             .placements
@@ -79,7 +79,7 @@ final desktopWindowCoordinatorProvider = Provider<void>((ref) {
     final target = ref
         .read(referenceShellProvider)
         .windowByWindowId(event.windowId);
-    return target?.isUserApp == true ? target!.objectId : null;
+    return target?.isPresentedUserApp == true ? target!.objectId : null;
   }
 
   void processPlacementUpdate(DenialWindowPlacementEvent event) {
@@ -221,7 +221,7 @@ final desktopWindowCoordinatorProvider = Provider<void>((ref) {
 bool _reduceWindowEvent(Ref ref, DenialWindowEvent event) {
   final shell = ref.read(referenceShellProvider);
   final target = shell.windowByWindowId(event.windowId);
-  if (target == null || !target.isUserApp) {
+  if (target == null || !target.isPresentedUserApp) {
     return false;
   }
 

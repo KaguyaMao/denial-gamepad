@@ -152,12 +152,12 @@ class ReferenceShellState {
 
   DenialWindow? get foregroundWindow {
     final window = windowByObjectId(foregroundObjectId);
-    return window != null && window.isUserApp ? window : null;
+    return window != null && window.isPresentedUserApp ? window : null;
   }
 
   DenialWindow? get launchingWindow {
     final window = windowByObjectId(launchingObjectId);
-    return window != null && window.isUserApp ? window : null;
+    return window != null && window.isPresentedUserApp ? window : null;
   }
 
   bool get launchTransitionActive => launchRequest != null;

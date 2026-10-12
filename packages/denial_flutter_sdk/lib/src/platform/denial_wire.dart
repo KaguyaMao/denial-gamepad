@@ -1526,6 +1526,7 @@ class DenialWireCodec {
             ? null
             : transientParentId,
         minimized: window.minimized,
+        hiddenByTransientParent: window.hiddenByTransientParent,
         fullscreen: window.fullscreen,
         maximized: window.maximized,
         transform: window.transform,

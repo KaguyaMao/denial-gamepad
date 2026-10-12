@@ -148,6 +148,7 @@ class DesktopWorkspaceOverview {
     required this.orientation,
     required List<DesktopWorkspaceOverviewCard> cards,
     required this.shelf,
+    this.strip = false,
     this.dropSlot,
   }) : cards = List.unmodifiable(cards);
 
@@ -155,6 +156,10 @@ class DesktopWorkspaceOverview {
   final Rect viewport;
   final WorkspaceSwitchingOrientation orientation;
   final List<DesktopWorkspaceOverviewCard> cards;
+
+  /// Whether workspaces are presented as one horizontally scrolling row.
+  /// Pointer-oriented managed layouts retain their grid presentation.
+  final bool strip;
 
   /// Background of the minimized-window shelf, or [Rect.zero] when empty.
   final Rect shelf;
@@ -172,9 +177,13 @@ class DesktopWorkspaceOverview {
     return null;
   }
 
-  DesktopWorkspaceOverviewCard? cardAt(Offset position) {
+  DesktopWorkspaceOverviewCard? cardAt(
+    Offset position, {
+    double scrollOffset = 0.0,
+  }) {
+    final unscrolledPosition = position - Offset(scrollOffset, 0.0);
     for (final card in cards) {
-      if (card.rect.contains(position)) {
+      if (card.rect.contains(unscrolledPosition)) {
         return card;
       }
     }
@@ -198,9 +207,12 @@ class DesktopOverviewState {
     required this.backgroundBounds,
     required this.selectedObjectId,
     required Map<int, Rect> frames,
+    Map<int, Rect>? slots,
+    this.sourceViewport,
     this.workspaces,
     this.scrollOffset = 0.0,
-  }) : frames = Map.unmodifiable(frames);
+  }) : frames = Map.unmodifiable(frames),
+       slots = slots == null ? null : Map<int, Rect>.unmodifiable(slots);
 
   const DesktopOverviewState._({
     required this.monitorId,
@@ -208,6 +220,8 @@ class DesktopOverviewState {
     required this.backgroundBounds,
     required this.selectedObjectId,
     required this.frames,
+    required this.slots,
+    required this.sourceViewport,
     required this.workspaces,
     required this.scrollOffset,
   });
@@ -219,6 +233,14 @@ class DesktopOverviewState {
   /// Null only when a workspace overview has no windows to select.
   final int? selectedObjectId;
   final Map<int, Rect> frames;
+
+  /// Uniform card bounds for a Gamepad application strip. Painting uses
+  /// [frames], which are the real windows inside these slots. Null for
+  /// overviews whose preview rectangle is the card itself.
+  final Map<int, Rect>? slots;
+
+  /// Work area represented by each [slots] entry.
+  final Rect? sourceViewport;
 
   /// Present when the overview shows workspace miniatures instead of the
   /// stacking spread.
@@ -232,6 +254,8 @@ class DesktopOverviewState {
   DesktopOverviewState copyWith({
     int? selectedObjectId,
     Map<int, Rect>? frames,
+    Map<int, Rect>? slots,
+    Rect? sourceViewport,
     double? scrollOffset,
   }) {
     return DesktopOverviewState._(
@@ -242,6 +266,10 @@ class DesktopOverviewState {
       frames: frames == null || identical(frames, this.frames)
           ? this.frames
           : Map.unmodifiable(frames),
+      slots: slots == null || identical(slots, this.slots)
+          ? this.slots
+          : Map<int, Rect>.unmodifiable(slots),
+      sourceViewport: sourceViewport ?? this.sourceViewport,
       workspaces: workspaces,
       scrollOffset: scrollOffset ?? this.scrollOffset,
     );
@@ -503,12 +531,19 @@ DenialWindow? desktopWindowAtPosition({
     // In overview the cards are the visual (scrolled) frames, so hit testing
     // must follow the strip rather than the native desktop rectangle.
     final frame = inOverview
-        ? workspace.visualFrame(placement)
+        ? workspace.overviewInteractionFrame(placement)
         : placement.frame;
+    final overviewScroll =
+        inOverview &&
+            !placement.minimized &&
+            workspace.overview?.workspaces?.strip == true
+        ? workspace.overview!.scrollOffset
+        : 0.0;
     if (frame.contains(position) ||
         window.popupRoots.any(
           (popup) => window
               .mapSurfaceRect(popup, placement.contentRect)
+              .shift(Offset(overviewScroll, 0.0))
               .contains(position),
         )) {
       topmost = placement;
@@ -595,12 +630,28 @@ class DesktopWorkspaceState {
 
   bool isInOverview(int objectId) => overview?.contains(objectId) ?? false;
 
+  /// Hit target for an overview card. Gamepad slots include the empty area
+  /// around a smaller window; other overviews hit the preview itself.
+  Rect overviewInteractionFrame(DesktopWindowPlacement placement) {
+    final slot = overview?.slots?[placement.objectId];
+    if (slot != null) {
+      return _scrolledOverviewRect(placement, slot);
+    }
+    return visualFrame(placement);
+  }
+
   Rect visualFrame(DesktopWindowPlacement placement) {
     final frame = overview?.frames[placement.objectId];
     if (frame == null) {
       return placement.frame;
     }
-    final scroll = overview?.scrollOffset ?? 0.0;
+    return _scrolledOverviewRect(placement, frame);
+  }
+
+  Rect _scrolledOverviewRect(DesktopWindowPlacement placement, Rect frame) {
+    final scroll = placement.minimized && overview?.workspaces?.strip == true
+        ? 0.0
+        : overview?.scrollOffset ?? 0.0;
     return scroll == 0.0 ? frame : frame.shift(Offset(scroll, 0.0));
   }
 

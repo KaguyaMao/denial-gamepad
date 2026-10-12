@@ -2071,6 +2071,15 @@ impl XdgShellHandler for RuntimeState {
         let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
         if let Some(window) = frontend.window_for_root_surface(surface.wl_surface()) {
             frontend.update_foreign_toplevel(&window);
+            #[cfg(feature = "flutter")]
+            if frontend.gamepad_shell()
+                && frontend
+                    .window_root_surface(&window)
+                    .and_then(|root| frontend.window_record_for_surface(&root.id()))
+                    .is_some_and(|record| record.gamepad_floating_overlay)
+            {
+                frontend.reconcile_window_layout(&window);
+            }
         }
         self.scene_sync.mark_dirty();
     }
@@ -2428,6 +2437,8 @@ impl XdgShellHandler for RuntimeState {
             let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
             frontend.remove_foreign_toplevel(surface.wl_surface());
             if let Some(window) = window.as_ref() {
+                #[cfg(feature = "flutter")]
+                frontend.mark_transient_children_orphaned(window);
                 frontend.remove_window_from_layout(window, true);
             }
             frontend.remove_surface_state(surface.wl_surface(), false);

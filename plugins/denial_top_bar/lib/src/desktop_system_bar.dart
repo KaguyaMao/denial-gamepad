@@ -9,6 +9,8 @@ import 'package:denial_flutter_sdk/services.dart';
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/theme.dart';
 import 'package:denial_sdk/system.dart';
+import 'package:flutter/gestures.dart'
+    show PointerDeviceKind, PointerDownEvent, PointerMoveEvent, PointerEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -16,8 +18,9 @@ part 'desktop_system_bar_components.dart';
 part 'desktop_system_bar_media.dart';
 part 'desktop_workspace_indicator.dart';
 
-/// The touch Dock strip height, mirroring native `GAMEPAD_SYSTEM_BAR_THICKNESS`.
+/// The touch Dock's overlay height; it is not included in native work areas.
 const double denialTouchSystemBarThickness = 51.0;
+const double _touchDockRevealHeight = 10.0;
 
 /// The desktop system bar. Its strip is reserved from the window work area,
 /// so windows maximize beside it while true fullscreen covers it.
@@ -178,10 +181,122 @@ class _DesktopSystemBarContent extends ConsumerWidget {
   }
 }
 
-/// The touch Dock strip for the gamepad profile: launcher, running windows,
-/// battery, clock, and the session power entry, without card backgrounds.
-class _TouchSystemBar extends ConsumerWidget {
+/// A transient touch Dock. Only its narrow top-edge reveal region remains
+/// interactive while hidden; the Dock paints over windows and reserves no
+/// native work area.
+class _TouchSystemBar extends StatefulWidget {
   const _TouchSystemBar({required this.monitorId});
+
+  final int monitorId;
+
+  @override
+  State<_TouchSystemBar> createState() => _TouchSystemBarState();
+}
+
+class _TouchSystemBarState extends State<_TouchSystemBar> {
+  static const _autoHideDelay = Duration(milliseconds: 2800);
+
+  Timer? _hideTimer;
+  int? _edgePointer;
+  Offset? _edgeStart;
+  bool _visible = false;
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
+
+  void _showDock() {
+    if (!_visible) setState(() => _visible = true);
+    _armAutoHide();
+  }
+
+  void _armAutoHide() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(_autoHideDelay, () {
+      if (mounted) setState(() => _visible = false);
+      _hideTimer = null;
+    });
+  }
+
+  void _onEdgeDown(PointerDownEvent event) {
+    if (event.kind != PointerDeviceKind.touch &&
+        event.kind != PointerDeviceKind.stylus &&
+        event.kind != PointerDeviceKind.invertedStylus) {
+      return;
+    }
+    _edgePointer = event.pointer;
+    _edgeStart = event.localPosition;
+  }
+
+  void _onEdgeMove(PointerMoveEvent event) {
+    if (event.pointer != _edgePointer || _edgeStart == null) return;
+    final delta = event.localPosition - _edgeStart!;
+    if (delta.dy >= 8 && delta.dy > delta.dx.abs()) {
+      _edgePointer = null;
+      _edgeStart = null;
+      _showDock();
+    } else if (delta.dy < -8 || delta.dx.abs() > 20) {
+      _edgePointer = null;
+      _edgeStart = null;
+    }
+  }
+
+  void _onEdgeEnd(PointerEvent event) {
+    if (event.pointer != _edgePointer) return;
+    _edgePointer = null;
+    _edgeStart = null;
+  }
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    clipBehavior: Clip.hardEdge,
+    children: [
+      Positioned.fill(
+        child: AnimatedSlide(
+          offset: Offset(0, _visible ? 0 : -1),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          child: IgnorePointer(
+            ignoring: !_visible,
+            child: ShellInputRegion(
+              debugLabel: 'Gamepad touch Dock',
+              active: _visible,
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => _armAutoHide(),
+                onPointerMove: (_) => _armAutoHide(),
+                child: _TouchSystemBarContent(monitorId: widget.monitorId),
+              ),
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        height: _touchDockRevealHeight,
+        child: ShellInputRegion(
+          debugLabel: 'Gamepad touch Dock reveal edge',
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: _onEdgeDown,
+            onPointerMove: _onEdgeMove,
+            onPointerUp: _onEdgeEnd,
+            onPointerCancel: _onEdgeEnd,
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+/// The touch Dock controls: launcher, running windows, status, and power.
+class _TouchSystemBarContent extends ConsumerWidget {
+  const _TouchSystemBarContent({required this.monitorId});
 
   final int monitorId;
 

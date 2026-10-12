@@ -47,7 +47,7 @@ class ShellController extends Notifier<ShellState>
       _bridge.windowActivations.listen((windowId) {
         if (!isBuildGenerationActive(generation)) return;
         final window = state.windowByWindowId(windowId);
-        if (window == null || !window.isUserApp) return;
+        if (window == null || !window.isPresentedUserApp) return;
         state = state.copyWith(
           foregroundObjectId: window.objectId,
           activationRevision: state.activationRevision + 1,
@@ -86,7 +86,7 @@ class ShellController extends Notifier<ShellState>
   void closeWindow(DenialWindow window) => _bridge.closeWindow(window);
 
   void focusWindow(DenialWindow window) {
-    if (!window.isUserApp) return;
+    if (!window.isPresentedUserApp) return;
     state = state.copyWith(foregroundObjectId: window.objectId);
     _bridge.focusWindow(window);
   }
@@ -140,7 +140,9 @@ class ShellController extends Notifier<ShellState>
         layerSurfaces.add(window);
       } else {
         windows.add(window);
-        foregroundStillVisible |= window.objectId == state.foregroundObjectId;
+        foregroundStillVisible |=
+            window.objectId == state.foregroundObjectId &&
+            window.isPresentedUserApp;
       }
     }
     if (_hasLoadedWindowSnapshot &&
