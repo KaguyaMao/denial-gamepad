@@ -5,6 +5,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 
+import 'system_services.dart' show WifiNetwork;
+
 /// Public read-only workspace projection, without desktop-controller exposure.
 class WorkspaceStatus {
   WorkspaceStatus({
@@ -26,6 +28,7 @@ class ApplicationWindow {
     required this.title,
     required this.active,
     required this.minimized,
+    this.tiled = false,
     this.previewSize = Size.zero,
   });
   final int id;
@@ -33,6 +36,9 @@ class ApplicationWindow {
   final String title;
   final bool active;
   final bool minimized;
+
+  /// The desktop layout manages this window as a tile.
+  final bool tiled;
 
   /// Logical bounds of the content rendered by [ShellWindowServices.buildWindowPreview].
   /// Zero means the window has not supplied usable dimensions yet.
@@ -66,7 +72,7 @@ abstract interface class ShellWindowServices {
   ProviderListenable<List<ApplicationWindow>> windows(int monitorId);
   void activateWindow(int id);
 
-  /// Backgrounds one application window through the managed minimize path.
+  /// Minimizes through the compositor, including removal from the tile layout.
   void minimizeWindow(int id);
 
   /// Closes one application window.
@@ -97,6 +103,10 @@ abstract interface class ShellDesktopServices {
   void toggleDesktop();
   ProviderListenable<bool> get desktopVisible;
   void toggleLauncher();
+
+  /// Opens the host's dashboard, including from touch-only desktop controls.
+  void openDashboard();
+  void toggleDashboard();
   void openPowerSettings();
 
   /// Opens the session power surface (restart, shut down, log out, suspend).
@@ -124,6 +134,19 @@ abstract interface class ShellTelemetryServices {
   ProviderListenable<LoadSeries> get cpu;
   ProviderListenable<List<GpuLoad>> get gpus;
   ProviderListenable<AsyncValue<DateTime>> get clock;
+}
+
+/// Output volume shares the host's state and interaction reconciliation.
+abstract interface class ShellAudioServices {
+  ProviderListenable<double> get volume;
+  void beginVolumeInteraction();
+  void setVolume(double value);
+  void commitVolume(double value);
+}
+
+/// The connected Wi-Fi network, including its current signal strength.
+abstract interface class ShellConnectivityServices {
+  ProviderListenable<WifiNetwork?> get connectedWifi;
 }
 
 /// Media playback state and semantic controls.
@@ -167,6 +190,8 @@ abstract interface class ShellServices
         ShellDesktopServices,
         ShellWorkspaceServices,
         ShellTelemetryServices,
+        ShellAudioServices,
+        ShellConnectivityServices,
         ShellMediaServices,
         ShellPresentationServices,
         ShellTrayServices {}
@@ -179,6 +204,10 @@ abstract interface class ShellStrings {
   String numberValue(int value);
   String workspaceLabel(int workspace);
   String get batteryTitle;
+  String get volumeTitle;
+  String get wifiTitle;
+  String get notConnected;
+  String get openDashboard;
   String get percentSign;
   String get celsiusUnit;
   String get metricCpu;

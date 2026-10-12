@@ -13,6 +13,7 @@ class InputLayoutSnapshot {
     this.exclusiveShellMode = false,
     this.observeClientPointerPresses = false,
     this.gamepadOverview = false,
+    this.mobilePresentation,
   });
 
   final int epoch;
@@ -25,11 +26,16 @@ class InputLayoutSnapshot {
   final bool observeClientPointerPresses;
   final bool gamepadOverview;
 
+  /// Native window geometry follows the active scene. Null retains the
+  /// compositor's current mode for shells which do not select a presentation.
+  final bool? mobilePresentation;
+
   bool hasSameRoutingAs(InputLayoutSnapshot other) {
     if (keyboardCapture != other.keyboardCapture ||
         exclusiveShellMode != other.exclusiveShellMode ||
         observeClientPointerPresses != other.observeClientPointerPresses ||
         gamepadOverview != other.gamepadOverview ||
+        mobilePresentation != other.mobilePresentation ||
         shellRegions.length != other.shellRegions.length ||
         softwareKeyboardRegions.length !=
             other.softwareKeyboardRegions.length ||

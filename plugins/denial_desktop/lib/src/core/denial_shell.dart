@@ -1,6 +1,6 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
-import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
 import 'package:denial_desktop/src/state/reference_shell_profile.dart';
+import 'package:denial_desktop/src/state/reference_shell_presentation.dart';
 
 import 'package:denial_flutter_sdk/popups.dart';
 import 'package:denial_flutter_sdk/surfaces.dart';
@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:denial_flutter_sdk/environment.dart';
 
 import '../desktop/desktop_input_layout_publisher.dart';
+import '../desktop/desktop_pet_holds.dart';
 
 import 'package:denial_flutter_sdk/localization.dart';
 import 'package:denial_flutter_sdk/settings.dart';
@@ -70,6 +71,10 @@ class DenialShell extends ConsumerWidget {
     final effectiveProfile = (displayLayout?.outputs.length ?? 0) > 1
         ? ReferenceShellProfile.desktop
         : profile;
+    final selectedPresentation = ref.watch(referenceShellPresentationProvider);
+    final effectivePresentation = (displayLayout?.outputs.length ?? 0) > 1
+        ? ReferenceShellProfile.desktop
+        : selectedPresentation;
     final presentation = ref.watch(
       shellSettingsProvider.select(
         (settings) => (
@@ -118,13 +123,19 @@ class DenialShell extends ConsumerWidget {
         (session) => session?.hidesCursor ?? false,
       ),
     );
+    final presentationProfile =
+        effectivePresentation == ReferenceShellProfile.gamepad
+        ? ReferenceShellProfile.desktop
+        : effectivePresentation;
     final scene = _ProfileScene(
-      profile: effectiveProfile,
-      scene: switch (effectiveProfile) {
-        ReferenceShellProfile.mobile => mobile,
-        ReferenceShellProfile.gamepad => gamepad,
-        ReferenceShellProfile.desktop => desktop,
-      },
+      profile: presentationProfile,
+      policyProfile: effectiveProfile,
+      scene: effectiveProfile == ReferenceShellProfile.gamepad &&
+              presentationProfile != ReferenceShellProfile.mobile
+          ? gamepad
+          : presentationProfile == ReferenceShellProfile.mobile
+          ? mobile
+          : desktop,
     );
     final fingerprint = ref.watch(fingerprintSceneProvider);
     final locked = ref.watch(
@@ -135,9 +146,9 @@ class DenialShell extends ConsumerWidget {
       locked: locked,
       onLaidOut: ref.read(fingerprintSceneProvider.notifier).laidOut,
       child: ShellCursorHost(
-        theme: effectiveProfile == ReferenceShellProfile.mobile
-            ? ShellCursorThemes.bibataModernIce
-            : cursorTheme,
+        theme: presentationProfile == ReferenceShellProfile.desktop
+            ? cursorTheme
+            : ShellCursorThemes.bibataModernIce,
         platformCursorShapes: bridge.cursorShapes,
         platformCursorStates: bridge.cursorStates,
         platformCursorPositions: bridge.cursorPositions,
@@ -154,9 +165,10 @@ class DenialShell extends ConsumerWidget {
     );
 
     return ShellRuntimeBindings(
-      workArea: effectiveProfile == ReferenceShellProfile.mobile
-          ? null
-          : desktopWorkArea,
+      mobilePresentation: presentationProfile == ReferenceShellProfile.mobile,
+      workArea: presentationProfile == ReferenceShellProfile.desktop
+          ? desktopWorkArea
+          : null,
       pairingSurfaceBuilder: pairingSurfaceBuilder,
       onLocked: onLocked,
       child: AnimatedShellTheme(
@@ -167,7 +179,10 @@ class DenialShell extends ConsumerWidget {
         child: DenialLocalizationScope(
           locale: presentation.locale,
           child: LowBatteryNotificationBinding(
-            child: _ShellEnvironment(profile: effectiveProfile, child: content),
+            child: _ShellEnvironment(
+              profile: effectivePresentation,
+              child: content,
+            ),
           ),
         ),
       ),
@@ -175,21 +190,28 @@ class DenialShell extends ConsumerWidget {
   }
 }
 
-class _ProfileScene extends ConsumerWidget {
-  const _ProfileScene({required this.profile, required this.scene});
+class _ProfileScene extends StatelessWidget {
+  const _ProfileScene({
+    required this.profile,
+    required this.policyProfile,
+    required this.scene,
+  });
 
   final ReferenceShellProfile profile;
+  final ReferenceShellProfile policyProfile;
   final DenialShellScene scene;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (profile == ReferenceShellProfile.mobile) {
-      return InputLayoutPublisher(
+  Widget build(BuildContext context) {
+    return switch (profile) {
+      ReferenceShellProfile.mobile => InputLayoutPublisher(
         child: Stack(
           fit: StackFit.expand,
           children: [
             ShellPopupHost(
               child: ShellSecureStage(
+                useConfiguredLockAnimation:
+                    policyProfile == ReferenceShellProfile.desktop,
                 scene: Stack(
                   fit: StackFit.expand,
                   children: [scene.content, ...scene.overlays],
@@ -197,82 +219,51 @@ class _ProfileScene extends ConsumerWidget {
                 chrome: scene.chrome,
               ),
             ),
-            const MobileSystemKeyboardLayer(),
+            if (policyProfile == ReferenceShellProfile.mobile ||
+                policyProfile == ReferenceShellProfile.gamepad)
+              const MobileSystemKeyboardLayer(),
           ],
         ),
-      );
-    }
-    // The gamepad profile reuses the desktop presentation scene; the touch
-    // adaptations (exclusive/split policy, strip overview, dock) are layered in
-    // through the desktop publisher. It also mounts the software keyboard
-    // above the lock screen and desktop, and the compositor resizes the focused
-    // tile to leave it room.
-    final stage = ShellSecureStage(
-      useConfiguredLockAnimation: true,
-      chrome: scene.chrome,
-      scene: Stack(
-        fit: StackFit.expand,
-        children: [
-          ShellPopupHost(
-            // Keep desktop feature popups inside the scene's paint plane.
-            // The screenshot selection layer remains above this overlay,
-            // so its frozen texture includes open menus while its controls
-            // paint and receive input above them.
-            child: ShellOverlayHost(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [scene.content, ...scene.overlays],
+      ),
+      ReferenceShellProfile.desktop => DesktopInputLayoutPublisher(
+        softwareKeyboardEnabled:
+            policyProfile == ReferenceShellProfile.mobile ||
+            policyProfile == ReferenceShellProfile.gamepad,
+        gamepad: policyProfile == ReferenceShellProfile.gamepad,
+        child: DesktopPetHoldPublisher(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ShellSecureStage(
+                useConfiguredLockAnimation:
+                    policyProfile == ReferenceShellProfile.desktop,
+                scene: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ShellPopupHost(
+                      // Keep desktop feature popups inside the scene's paint plane.
+                      // The screenshot selection layer remains above this overlay,
+                      // so its frozen texture includes open menus while its controls
+                      // paint and receive input above them.
+                      child: ShellOverlayHost(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [scene.content, ...scene.overlays],
+                        ),
+                      ),
+                    ),
+                    const ScreenshotSelectionLayer(),
+                  ],
+                ),
               ),
-            ),
-          ),
-          const ScreenshotSelectionLayer(),
-        ],
-      ),
-    );
-    return DesktopInputLayoutPublisher(
-      gamepad: profile == ReferenceShellProfile.gamepad,
-      child: profile == ReferenceShellProfile.gamepad
-          ? Stack(
-              fit: StackFit.expand,
-              children: [
-                _GamepadKeyboardInset(child: stage),
+              if (policyProfile == ReferenceShellProfile.mobile ||
+                  policyProfile == ReferenceShellProfile.gamepad)
                 const MobileSystemKeyboardLayer(),
-              ],
-            )
-          : stage,
-    );
-  }
-}
-
-/// Reserves the software-keyboard height inside the Flutter scene itself.
-///
-/// The compositor already shrinks the native tile work area, but Flutter-owned
-/// UI (lock screen, launcher search, desktop chrome) lays out in the full
-/// view and would otherwise sit behind the keyboard overlay. iOS
-/// (adjustResize), Android, and Plasma all shrink the app area above the
-/// keyboard instead of covering it; this padding gives the gamepad scene the
-/// same behavior so focused fields stay visible.
-class _GamepadKeyboardInset extends ConsumerWidget {
-  const _GamepadKeyboardInset({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final progress = ref.watch(
-      referenceShellProvider.select(
-        (state) => state.edgePanelDragProgress,
+            ],
+          ),
+        ),
       ),
-    );
-    final viewSize = MediaQuery.sizeOf(context);
-    final inset =
-        ReferenceShellMetrics.edgePanelHeight(viewSize) * progress.clamp(0.0, 1.0);
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOutCubic,
-      padding: EdgeInsets.only(bottom: inset),
-      child: child,
-    );
+    };
   }
 }
 

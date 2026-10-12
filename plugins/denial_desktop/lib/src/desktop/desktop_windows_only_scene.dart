@@ -21,6 +21,7 @@ Widget buildDesktopWindowsOnlyScene({
   required Size viewSize,
   required DisplayLayout? displayLayout,
   required List<DenialWindow> layerSurfaces,
+  required Map<int, List<DenialWindow>> heldLayers,
   required DesktopWorkspaceState desktop,
   required bool desktopVisible,
   required MinimizedWindowPlacement minimizedWindowPlacement,
@@ -52,10 +53,13 @@ Widget buildDesktopWindowsOnlyScene({
       // Keep the original no-wallpaper baseline available independently of
       // the wallpaper-backed scene used to inspect window shadows.
       if (desktopDiagnosticWallpaper) const ShellWallpaper(),
+      // A held layer is drawn in its window's slot instead.
       for (final surface in layerSurfaces)
-        if (surface.contentKind ==
-                DenialWindowContentKind.layerShellBackground ||
-            surface.contentKind == DenialWindowContentKind.layerShellBottom)
+        if (!surface.isHeld &&
+            (surface.contentKind ==
+                    DenialWindowContentKind.layerShellBackground ||
+                surface.contentKind ==
+                    DenialWindowContentKind.layerShellBottom))
           DesktopLayerShellSurface(
             key: ValueKey<String>('layer-shell-${surface.surfaceId}'),
             surface: surface,
@@ -95,6 +99,7 @@ Widget buildDesktopWindowsOnlyScene({
         onUpdateOverviewDrag: onUpdateOverviewDrag,
         onEndOverviewDrag: onEndOverviewDrag,
         onCancelOverviewDrag: onCancelOverviewDrag,
+        heldLayers: heldLayers,
       ),
       for (final popup in popupSurfaces)
         if (popup.geometry case final geometry?)
@@ -121,8 +126,10 @@ Widget buildDesktopWindowsOnlyScene({
             ),
           ),
       for (final surface in layerSurfaces)
-        if (surface.contentKind == DenialWindowContentKind.layerShellTop ||
-            surface.contentKind == DenialWindowContentKind.layerShellOverlay)
+        if (!surface.isHeld &&
+            (surface.contentKind == DenialWindowContentKind.layerShellTop ||
+                surface.contentKind ==
+                    DenialWindowContentKind.layerShellOverlay))
           DesktopLayerShellSurface(
             key: ValueKey<String>('layer-shell-${surface.surfaceId}'),
             surface: surface,

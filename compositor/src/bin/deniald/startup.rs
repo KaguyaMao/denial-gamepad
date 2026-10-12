@@ -103,6 +103,14 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         .wayland
         .then(settings::SettingsManager::load)
         .transpose()?;
+    if let Some(settings) = settings.as_mut() {
+        settings.rotation_lock_supported =
+            cfg!(feature = "flutter") && options.flutter_bundle.is_some();
+        if let Some(rotation) = settings.locked_sensor_rotation() {
+            output_configuration.sensor_rotation = rotation;
+        }
+        settings.current_sensor_rotation = output_configuration.sensor_rotation;
+    }
     let mut shortcuts = options.wayland.then(ShortcutManager::load).transpose()?;
     if let Some(settings) = settings.as_mut()
         && let Err(error) = settings.keyboard().compiled_layout_names()
@@ -362,6 +370,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             session.clone(),
             &seat_name,
             drm_fd.clone(),
+            render_fd.clone(),
             options.xwayland,
             options.work_area.clone(),
             output_configuration.scrolling_layout_axes.clone(),

@@ -1,4 +1,4 @@
-//! Compositor-owned direct-touch window gestures.
+//! Compositor-owned direct-touch desktop and window gestures.
 //!
 //! Recognition lives here so the ordinary pointer, Wayland-touch and Flutter
 //! routes remain unaware of window gesture policy. The input entry point only
@@ -8,16 +8,15 @@
 use std::collections::HashMap;
 
 use smithay::desktop::Window;
-use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size};
 
 use super::super::RuntimeState;
-use super::super::native_shortcut::{ShortcutDisposition, ShortcutGesture};
-use super::super::window_grab::constrain_dimension;
-use super::super::window_layout::{LayoutDirection, LayoutResizeEdges};
-use super::super::wire::{
-    ShellAction, WindowGeometry, WindowPlacementChange, WindowPlacementPhase,
+use super::super::touchpad_gestures::{
+    ActiveSwipe, HorizontalScrollDirections, TouchpadGestureEvent,
 };
+use super::super::window_grab::{TileMoveGrab, constrain_dimension};
+use super::super::window_layout::LayoutResizeEdges;
+use super::super::wire::{WindowGeometry, WindowPlacementChange, WindowPlacementPhase};
 use super::managed_window::ManagedWindow;
 use super::window_management;
 
@@ -30,8 +29,6 @@ const MOVE_SLOP: f64 = 4.0;
 const MINIMIZE_SWIPE_DISTANCE: f64 = 96.0;
 const PINCH_SLOP: f64 = 16.0;
 const PINCH_TRANSLATION_DOMINANCE: f64 = 1.5;
-const THREE_FINGER_SWIPE_DISTANCE: f64 = 100.0;
-const SWIPE_DIRECTION_DOMINANCE: f64 = 1.5;
 const FOUR_FINGER_INWARD_SLOP: f64 = 8.0;
 const FOUR_FINGER_CRUSH_DISTANCE: f64 = 32.0;
 const MIN_LOCAL_WINDOW_DIMENSION: f64 = 64.0;
@@ -44,12 +41,9 @@ pub(super) struct TouchWindowTarget {
     pub in_gesture_strip: bool,
     pub in_move_corner: bool,
     pub geometry_locked: bool,
-    /// Touch-first desktop profile. Exclusive/split tiles resize from their
-    /// edges and never free-move or pinch-resize.
+    /// Touch-first desktop. Tiles resize from their edges and do not free-move.
     pub gamepad_shell: bool,
-    /// Output monitor id for the touch shell's per-monitor navigation.
     pub monitor_id: i64,
-    /// Resize edges under a gamepad contact, when it landed on a tile border.
     pub resize_edges: Option<LayoutResizeEdges>,
 }
 
@@ -61,8 +55,13 @@ pub(super) enum TouchWindowAction {
         change: WindowPlacementChange,
         geometry: WindowGeometry,
     },
-    /// Move one gamepad tile edge, which the layout turns into a shared
-    /// boundary adjustment for its siblings.
+    Minimize {
+        window_id: u64,
+    },
+    Close {
+        window_id: u64,
+    },
+    /// Move one gamepad tile edge. The layout turns that into a shared boundary.
     EdgeResize {
         window_id: u64,
         phase: WindowPlacementPhase,
@@ -70,18 +69,11 @@ pub(super) enum TouchWindowAction {
         delta_x: f64,
         delta_y: f64,
     },
-    Minimize {
-        window_id: u64,
+    Overview,
+    Swipe {
+        event: TouchpadGestureEvent,
+        origin: Point<f64, Logical>,
     },
-    Close {
-        window_id: u64,
-    },
-    Shell(ShellAction),
-    Navigate {
-        monitor_id: i64,
-        direction: LayoutDirection,
-    },
-    Gesture(ShortcutGesture),
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -96,6 +88,7 @@ pub(super) struct TouchGestureUpdate {
 struct Contact {
     position: Point<f64, Logical>,
     target: Option<TouchWindowTarget>,
+    desktop_background: bool,
     captured: bool,
 }
 
@@ -109,15 +102,6 @@ enum Gesture {
         last_geometry: WindowGeometry,
         started: bool,
         geometry_locked: bool,
-    },
-    /// One-finger drag on a gamepad tile's border.
-    EdgeResize {
-        slot: i32,
-        window_id: u64,
-        origin: Point<f64, Logical>,
-        last: Point<f64, Logical>,
-        edges: LayoutResizeEdges,
-        started: bool,
     },
     PinchCandidate {
         slots: [i32; 2],
@@ -138,14 +122,17 @@ enum Gesture {
         window_id: u64,
         origin: Point<f64, Logical>,
     },
-    ThreeFinger {
-        slots: [i32; 3],
+    EdgeResize {
+        slot: i32,
         window_id: u64,
         origin: Point<f64, Logical>,
-        gamepad_monitor: Option<i64>,
+        last: Point<f64, Logical>,
+        edges: LayoutResizeEdges,
+        started: bool,
     },
-    /// One-finger swipe from the touch shell's bottom strip: a short swipe
-    /// backgrounds the focused app, a long swipe opens overview.
+    /// Bottom-strip home gesture: a short swipe backgrounds the focused app,
+    /// a long swipe opens overview. Multi-finger navigation stays on main's
+    /// shared swipe route.
     GamepadHomeSwipe {
         slot: i32,
         window_id: u64,
@@ -153,66 +140,60 @@ enum Gesture {
         last: Point<f64, Logical>,
         overview_distance: f64,
     },
-    FourFinger {
+    Swipe {
         slots: [i32; 4],
-        window_id: u64,
-        center: Point<f64, Logical>,
-        initial_distances: [f64; 4],
-        moved: [bool; 4],
+        fingers: usize,
+        origin: Point<f64, Logical>,
+        last_center: Point<f64, Logical>,
+        crush: Option<WindowCrush>,
     },
     /// Keep every participant compositor-owned until all fingers are lifted.
-    Blocked { window_id: u64 },
+    Blocked { window_id: Option<u64> },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WindowCrush {
+    window_id: u64,
+    center: Point<f64, Logical>,
+    initial_distances: [f64; 4],
+    moved: [bool; 4],
 }
 
 impl Gesture {
-    fn window_id(self) -> u64 {
+    fn window_id(self) -> Option<u64> {
         match self {
-            Self::EdgeResize { window_id, .. }
-            | Self::Move { window_id, .. }
+            Self::Move { window_id, .. }
             | Self::PinchCandidate { window_id, .. }
             | Self::Pinch { window_id, .. }
             | Self::MinimizeSwipe { window_id, .. }
-            | Self::ThreeFinger { window_id, .. }
-            | Self::GamepadHomeSwipe { window_id, .. }
-            | Self::FourFinger { window_id, .. }
-            | Self::Blocked { window_id, .. } => window_id,
+            | Self::EdgeResize { window_id, .. }
+            | Self::GamepadHomeSwipe { window_id, .. } => Some(window_id),
+            Self::Swipe { .. } => None,
+            Self::Blocked { window_id, .. } => window_id,
         }
     }
 
     fn includes(self, slot: i32) -> bool {
         match self {
-            Self::EdgeResize {
-                slot: gesture_slot, ..
-            } => gesture_slot == slot,
             Self::Move {
                 slot: gesture_slot, ..
-            } => gesture_slot == slot,
-            Self::GamepadHomeSwipe {
+            }
+            | Self::EdgeResize {
+                slot: gesture_slot, ..
+            }
+            | Self::GamepadHomeSwipe {
                 slot: gesture_slot, ..
             } => gesture_slot == slot,
             Self::PinchCandidate { slots, .. }
             | Self::Pinch { slots, .. }
             | Self::MinimizeSwipe { slots, .. } => slots.contains(&slot),
-            Self::ThreeFinger { slots, .. } => slots.contains(&slot),
-            Self::FourFinger { slots, .. } => slots.contains(&slot),
+            Self::Swipe { slots, fingers, .. } => slots[..fingers].contains(&slot),
             Self::Blocked { .. } => true,
         }
     }
 
     fn finish_action(self) -> Option<TouchWindowAction> {
         match self {
-            Self::EdgeResize {
-                window_id,
-                edges,
-                started: true,
-                ..
-            } => Some(TouchWindowAction::EdgeResize {
-                window_id,
-                phase: WindowPlacementPhase::End,
-                edges,
-                delta_x: 0.0,
-                delta_y: 0.0,
-            }),
             Self::Move {
                 window_id,
                 last_geometry,
@@ -234,83 +215,151 @@ impl Gesture {
                 change: WindowPlacementChange::Resize,
                 geometry: last_geometry,
             }),
-            // A short bottom-strip swipe backgrounds the focused app; a long
-            // swipe is handled as an Overview shell action in `motion`.
+            Self::EdgeResize {
+                window_id,
+                last,
+                origin,
+                edges,
+                started: true,
+                ..
+            } => Some(TouchWindowAction::EdgeResize {
+                window_id,
+                phase: WindowPlacementPhase::End,
+                edges,
+                delta_x: last.x - origin.x,
+                delta_y: last.y - origin.y,
+            }),
             Self::GamepadHomeSwipe {
                 window_id,
                 origin,
                 last,
+                overview_distance,
                 ..
-            } if last.y - origin.y <= -72.0 && window_id != 0 => {
-                Some(TouchWindowAction::Minimize { window_id })
+            } => {
+                let delta = last - origin;
+                if delta.y <= -overview_distance && delta.y.abs() >= delta.x.abs() {
+                    Some(TouchWindowAction::Overview)
+                } else if delta.y <= -MINIMIZE_SWIPE_DISTANCE && delta.y.abs() >= delta.x.abs() {
+                    Some(TouchWindowAction::Minimize { window_id })
+                } else {
+                    None
+                }
             }
             _ => None,
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(super) struct TouchGestureState {
     contacts: HashMap<i32, Contact>,
     gesture: Option<Gesture>,
+    placement_transform: Option<(u64, PlacementTransform)>,
+    layout_move: Option<TileMoveGrab>,
+    swipe: Option<ActiveSwipe>,
+    swipe_directions: HorizontalScrollDirections,
+    last_timestamp_micros: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PlacementTransform {
+    source: WindowGeometry,
+    restored: WindowGeometry,
+}
+
+impl PlacementTransform {
+    fn apply(self, geometry: WindowGeometry, change: WindowPlacementChange) -> WindowGeometry {
+        if change == WindowPlacementChange::Move {
+            return WindowGeometry {
+                x: self.restored.x + geometry.x - self.source.x,
+                y: self.restored.y + geometry.y - self.source.y,
+                ..self.restored
+            };
+        }
+        let width = self.restored.width + geometry.width - self.source.width;
+        let height = self.restored.height + geometry.height - self.source.height;
+        WindowGeometry {
+            x: self.restored.x + geometry.x - self.source.x,
+            y: self.restored.y + geometry.y - self.source.y,
+            width,
+            height,
+        }
+    }
 }
 
 impl TouchGestureState {
+    pub(super) fn set_swipe_directions(&mut self, directions: HorizontalScrollDirections) {
+        self.swipe_directions = directions;
+    }
+
     pub(super) fn down(
         &mut self,
         slot: i32,
         position: Point<f64, Logical>,
         target: Option<TouchWindowTarget>,
     ) -> TouchGestureUpdate {
+        self.down_contact(slot, position, target, false)
+    }
+
+    pub(super) fn down_on_desktop(
+        &mut self,
+        slot: i32,
+        position: Point<f64, Logical>,
+    ) -> TouchGestureUpdate {
+        self.down_contact(slot, position, None, true)
+    }
+
+    fn down_contact(
+        &mut self,
+        slot: i32,
+        position: Point<f64, Logical>,
+        target: Option<TouchWindowTarget>,
+        desktop_background: bool,
+    ) -> TouchGestureUpdate {
         self.contacts.insert(
             slot,
             Contact {
                 position,
                 target,
+                desktop_background,
                 captured: false,
             },
         );
-        let Some(target) = target else {
-            return TouchGestureUpdate::default();
-        };
-
-        // Gamepad tiles resize from their border. Claim the contact before any
-        // multi-finger or corner gesture so a border drag is never a client tap.
-        if target.gamepad_shell
-            && !target.in_gesture_strip
-            && self.contacts.len() == 1
-            && self.gesture.is_none()
-            && let Some(edges) = target.resize_edges
-        {
-            self.gesture = Some(Gesture::EdgeResize {
-                slot,
-                window_id: target.window_id,
-                origin: position,
-                last: position,
-                edges,
-                started: false,
-            });
+        if target.is_none() && !desktop_background {
             return TouchGestureUpdate::default();
         }
-
-        // The bottom strip owns the home gesture: short swipes background the
-        // focused app, long swipes open overview.
-        if target.gamepad_shell
-            && target.in_gesture_strip
+        let window_id = target.map(|target| target.window_id);
+        if let Some(target) = target
+            && target.gamepad_shell
             && self.contacts.len() == 1
             && self.gesture.is_none()
         {
-            self.gesture = Some(Gesture::GamepadHomeSwipe {
-                slot,
-                window_id: target.window_id,
-                origin: position,
-                last: position,
-                overview_distance: (target.geometry.height * 0.34).max(192.0),
-            });
-            return TouchGestureUpdate::default();
+            if !target.in_gesture_strip
+                && let Some(edges) = target.resize_edges
+            {
+                self.gesture = Some(Gesture::EdgeResize {
+                    slot,
+                    window_id: target.window_id,
+                    origin: position,
+                    last: position,
+                    edges,
+                    started: false,
+                });
+                return TouchGestureUpdate::default();
+            }
+            if target.in_gesture_strip {
+                self.gesture = Some(Gesture::GamepadHomeSwipe {
+                    slot,
+                    window_id: target.window_id,
+                    origin: position,
+                    last: position,
+                    overview_distance: (target.geometry.height * 0.34).max(192.0),
+                });
+                return TouchGestureUpdate::default();
+            }
         }
 
-        if matches!(self.gesture, Some(Gesture::Blocked { window_id }) if target.gamepad_shell || window_id == target.window_id)
+        if matches!(self.gesture, Some(Gesture::Blocked { window_id: blocked }) if blocked.is_none() || blocked == window_id)
         {
             return TouchGestureUpdate {
                 consume: true,
@@ -318,65 +367,31 @@ impl TouchGestureState {
                 actions: Vec::new(),
             };
         }
-
-        // The touch shell has one visible tile per workspace; a multi-finger
-        // gesture groups by monitor rather than by window identity.
-        let same_window = if target.gamepad_shell {
-            self.contacts
-                .iter()
-                .filter_map(|(slot, contact)| {
-                    contact
-                        .target
-                        .is_some_and(|other| {
-                            other.gamepad_shell && other.monitor_id == target.monitor_id
-                        })
-                        .then_some(*slot)
-                })
-                .collect::<Vec<_>>()
-        } else {
-            self.window_slots(target.window_id)
-        };
-        if !target.gamepad_shell
-            && same_window.len() >= 4
-            && self
-                .gesture
-                .is_none_or(|gesture| gesture.window_id() == target.window_id)
-        {
-            if matches!(self.gesture, Some(Gesture::FourFinger { .. })) {
-                return TouchGestureUpdate {
-                    consume: true,
-                    captured_slots: self.capture_slots(&[slot]),
-                    actions: Vec::new(),
-                };
-            }
-            return self.begin_four_finger(same_window, target);
-        }
-        if same_window.len() >= 3
-            && (target.gamepad_shell
-                || self
-                    .gesture
-                    .is_none_or(|gesture| gesture.window_id() == target.window_id))
-        {
-            if matches!(self.gesture, Some(Gesture::ThreeFinger { .. })) {
-                return TouchGestureUpdate {
-                    consume: true,
-                    captured_slots: self.capture_slots(&[slot]),
-                    actions: Vec::new(),
-                };
-            }
-            return self.begin_three_finger(
-                same_window,
-                target.window_id,
-                target.gamepad_shell.then_some(target.monitor_id),
-            );
-        }
-
-        if target.gamepad_shell {
+        if matches!(self.gesture, Some(Gesture::Blocked { .. })) {
             return TouchGestureUpdate::default();
         }
 
+        let desktop_slots = self.desktop_slots();
+        if desktop_slots.len() >= 3 {
+            if matches!(self.gesture, Some(Gesture::Swipe { fingers: 4, .. }))
+                || self.swipe.as_ref().is_some_and(ActiveSwipe::has_started)
+                || (desktop_slots.len() == 3 && matches!(self.gesture, Some(Gesture::Swipe { .. })))
+            {
+                return TouchGestureUpdate {
+                    consume: true,
+                    captured_slots: self.capture_slots(&[slot]),
+                    actions: Vec::new(),
+                };
+            }
+            return self.begin_swipe(desktop_slots, target);
+        }
+
+        let same_window = self.window_slots(window_id);
+        let Some(target) = target else {
+            return TouchGestureUpdate::default();
+        };
         if let Some(gesture) = self.gesture
-            && gesture.window_id() == target.window_id
+            && gesture.window_id() == window_id
         {
             if matches!(gesture, Gesture::Move { .. }) && same_window.len() == 2 {
                 return self.promote_move_to_two_fingers(gesture, same_window, target);
@@ -429,37 +444,36 @@ impl TouchGestureState {
         TouchGestureUpdate::default()
     }
 
-    pub(super) fn motion(
+    #[cfg(test)]
+    fn motion(&mut self, slot: i32, position: Point<f64, Logical>) -> TouchGestureUpdate {
+        self.motion_at(slot, position, 0)
+    }
+
+    pub(super) fn motion_at(
         &mut self,
         slot: i32,
         position: Point<f64, Logical>,
+        timestamp_micros: u64,
     ) -> TouchGestureUpdate {
+        self.last_timestamp_micros = timestamp_micros;
         let Some(contact) = self.contacts.get_mut(&slot) else {
             return TouchGestureUpdate::default();
         };
         contact.position = position;
         let captured = contact.captured;
-
         if let Some(Gesture::EdgeResize {
-            slot: owner,
+            slot: gesture_slot,
             window_id,
             origin,
-            last,
             edges,
             started,
+            ..
         }) = self.gesture
+            && gesture_slot == slot
         {
-            if owner != slot {
-                return TouchGestureUpdate::default();
-            }
-            let travel = position - origin;
-            if !started && travel.x.hypot(travel.y) < MOVE_SLOP {
-                return TouchGestureUpdate::default();
-            }
-            let captured_slots = self.capture_slots(&[slot]);
-            let step = position - last;
+            let delta = position - origin;
             let mut actions = Vec::new();
-            if !started {
+            if !started && delta.x * delta.x + delta.y * delta.y >= MOVE_SLOP * MOVE_SLOP {
                 actions.push(TouchWindowAction::EdgeResize {
                     window_id,
                     phase: WindowPlacementPhase::Begin,
@@ -467,46 +481,66 @@ impl TouchGestureState {
                     delta_x: 0.0,
                     delta_y: 0.0,
                 });
+                self.gesture = Some(Gesture::EdgeResize {
+                    slot,
+                    window_id,
+                    origin,
+                    last: position,
+                    edges,
+                    started: true,
+                });
+                return TouchGestureUpdate {
+                    consume: true,
+                    captured_slots: self.capture_slots(&[slot]),
+                    actions,
+                };
             }
-            actions.push(TouchWindowAction::EdgeResize {
-                window_id,
-                phase: WindowPlacementPhase::Update,
-                edges,
-                delta_x: step.x,
-                delta_y: step.y,
-            });
-            self.gesture = Some(Gesture::EdgeResize {
+            if started {
+                self.gesture = Some(Gesture::EdgeResize {
+                    slot,
+                    window_id,
+                    origin,
+                    last: position,
+                    edges,
+                    started: true,
+                });
+                actions.push(TouchWindowAction::EdgeResize {
+                    window_id,
+                    phase: WindowPlacementPhase::Update,
+                    edges,
+                    delta_x: delta.x,
+                    delta_y: delta.y,
+                });
+                return TouchGestureUpdate {
+                    consume: true,
+                    captured_slots: Vec::new(),
+                    actions,
+                };
+            }
+            return TouchGestureUpdate::default();
+        }
+        if let Some(Gesture::GamepadHomeSwipe {
+            slot: gesture_slot,
+            window_id,
+            origin,
+            overview_distance,
+            ..
+        }) = self.gesture
+            && gesture_slot == slot
+        {
+            self.gesture = Some(Gesture::GamepadHomeSwipe {
                 slot,
                 window_id,
                 origin,
                 last: position,
-                edges,
-                started: true,
+                overview_distance,
             });
             return TouchGestureUpdate {
                 consume: true,
-                captured_slots,
-                actions,
+                captured_slots: self.capture_slots(&[slot]),
+                actions: Vec::new(),
             };
         }
-
-        // Candidates must leave taps and app scrolling untouched. Claim only
-        // a deliberate vertical swipe, then cancel its previous route first.
-        let claim_slots = match self.gesture.as_ref() {
-            Some(Gesture::GamepadHomeSwipe {
-                slot: owner,
-                origin,
-                ..
-            }) if *owner == slot
-                && position.y - origin.y <= -16.0
-                && (position.y - origin.y).abs() > (position.x - origin.x).abs() * 1.5 =>
-            {
-                Some(vec![slot])
-            }
-            _ => None,
-        };
-        let captured_slots = claim_slots.map_or_else(Vec::new, |slots| self.capture_slots(&slots));
-        let captured = captured || !captured_slots.is_empty();
 
         if matches!(
             self.gesture,
@@ -635,7 +669,6 @@ impl TouchGestureState {
 
         let mut update = TouchGestureUpdate {
             consume: true,
-            captured_slots,
             ..TouchGestureUpdate::default()
         };
         let Some(mut gesture) = self.gesture.take() else {
@@ -708,105 +741,63 @@ impl TouchGestureState {
                             window_id: *window_id,
                         });
                         gesture = Gesture::Blocked {
-                            window_id: *window_id,
+                            window_id: Some(*window_id),
                         };
                     }
                 }
             }
-            Gesture::ThreeFinger {
+            Gesture::Swipe {
                 slots,
-                window_id,
+                fingers,
                 origin,
-                gamepad_monitor,
-            } if slots.contains(&slot) => {
-                if let Some(center) = self.three_contact_center(*slots) {
-                    let delta = center - *origin;
-                    let upward = -delta.y;
-                    let horizontal = delta.x.abs();
-                    if let Some(monitor_id) = *gamepad_monitor {
-                        // The touch shell navigates between workspaces.
-                        if delta.x.abs().max(delta.y.abs()) >= THREE_FINGER_SWIPE_DISTANCE {
-                            let direction =
-                                if horizontal >= delta.y.abs() * SWIPE_DIRECTION_DOMINANCE {
-                                    Some(if delta.x < 0.0 {
-                                        LayoutDirection::Right
-                                    } else {
-                                        LayoutDirection::Left
-                                    })
-                                } else if delta.y.abs() >= horizontal * SWIPE_DIRECTION_DOMINANCE {
-                                    Some(if delta.y < 0.0 {
-                                        LayoutDirection::Down
-                                    } else {
-                                        LayoutDirection::Up
-                                    })
-                                } else {
-                                    None
-                                };
-                            if let Some(direction) = direction {
-                                update.actions.push(TouchWindowAction::Navigate {
-                                    monitor_id,
-                                    direction,
-                                });
-                                gesture = Gesture::Blocked {
-                                    window_id: *window_id,
-                                };
+                last_center,
+                crush,
+            } if slots[..*fingers].contains(&slot) => {
+                if let Some(center) = self.swipe_center(&slots[..*fingers]) {
+                    if let Some(crush) = crush {
+                        let moved_slot = slots
+                            .iter()
+                            .position(|candidate| *candidate == slot)
+                            .expect("four-finger gesture lost its moving contact");
+                        crush.moved[moved_slot] = true;
+                        if crush.moved.iter().all(|moved| *moved)
+                            && self.contact_distances(*slots, crush.center).is_some_and(
+                                |distances| {
+                                    inward_crush(
+                                        crush.initial_distances,
+                                        distances,
+                                        point_distance(*origin, center),
+                                    )
+                                },
+                            )
+                            && self.swipe.as_ref().is_none_or(|swipe| !swipe.has_started())
+                        {
+                            update.actions.push(TouchWindowAction::Close {
+                                window_id: crush.window_id,
+                            });
+                            self.swipe = None;
+                            self.gesture = Some(Gesture::Blocked { window_id: None });
+                            return update;
+                        }
+                    }
+                    let delta = center - *last_center;
+                    *last_center = center;
+                    if let Some(swipe) = self.swipe.as_mut() {
+                        match swipe.update(delta.x, delta.y, timestamp_micros) {
+                            Ok(Some(event)) => update.actions.push(TouchWindowAction::Swipe {
+                                event,
+                                origin: *origin,
+                            }),
+                            Ok(None) => {}
+                            Err(()) => {
+                                self.gesture = Some(gesture);
+                                if let Some(action) = self.finish_swipe(true) {
+                                    update.actions.push(action);
+                                }
+                                gesture = Gesture::Blocked { window_id: None };
                             }
                         }
-                    } else if upward >= THREE_FINGER_SWIPE_DISTANCE
-                        && upward >= horizontal * SWIPE_DIRECTION_DOMINANCE
-                    {
-                        update.actions.push(TouchWindowAction::Gesture(
-                            ShortcutGesture::ThreeFingerSwipeUp,
-                        ));
-                        gesture = Gesture::Blocked {
-                            window_id: *window_id,
-                        };
                     }
-                }
-            }
-            Gesture::GamepadHomeSwipe {
-                slot: gesture_slot,
-                window_id,
-                origin,
-                last,
-                overview_distance,
-            } if *gesture_slot == slot => {
-                *last = position;
-                let delta = position - *origin;
-                if delta.y <= -*overview_distance {
-                    update
-                        .actions
-                        .push(TouchWindowAction::Shell(ShellAction::Overview));
-                    gesture = Gesture::Blocked {
-                        window_id: *window_id,
-                    };
-                }
-            }
-            Gesture::FourFinger {
-                slots,
-                window_id,
-                center,
-                initial_distances,
-                moved,
-            } if slots.contains(&slot) => {
-                let moved_slot = slots
-                    .iter()
-                    .position(|candidate| *candidate == slot)
-                    .expect("four-finger gesture lost its moving contact");
-                moved[moved_slot] = true;
-                if moved.iter().all(|contact_moved| *contact_moved)
-                    && self
-                        .contact_distances(*slots, *center)
-                        .is_some_and(|current_distances| {
-                            inward_crush(*initial_distances, current_distances)
-                        })
-                {
-                    update.actions.push(TouchWindowAction::Close {
-                        window_id: *window_id,
-                    });
-                    gesture = Gesture::Blocked {
-                        window_id: *window_id,
-                    };
                 }
             }
             _ => {}
@@ -815,21 +806,31 @@ impl TouchGestureState {
         update
     }
 
-    pub(super) fn up(&mut self, slot: i32) -> TouchGestureUpdate {
-        self.finish_contact(slot)
+    #[cfg(test)]
+    fn up(&mut self, slot: i32) -> TouchGestureUpdate {
+        self.up_at(slot, 0)
     }
 
-    pub(super) fn cancel(&mut self, slot: i32) -> TouchGestureUpdate {
-        let mut update = self.finish_contact(slot);
-        // A cancelled gesture never backgrounds a window; only committed
-        // placement geometry survives.
-        update
-            .actions
-            .retain(|action| matches!(action, TouchWindowAction::Placement { .. }));
-        update
+    pub(super) fn up_at(&mut self, slot: i32, timestamp_micros: u64) -> TouchGestureUpdate {
+        self.finish_contact(slot, false, timestamp_micros)
     }
 
-    fn finish_contact(&mut self, slot: i32) -> TouchGestureUpdate {
+    #[cfg(test)]
+    fn cancel(&mut self, slot: i32) -> TouchGestureUpdate {
+        self.cancel_at(slot, 0)
+    }
+
+    pub(super) fn cancel_at(&mut self, slot: i32, timestamp_micros: u64) -> TouchGestureUpdate {
+        self.finish_contact(slot, true, timestamp_micros)
+    }
+
+    fn finish_contact(
+        &mut self,
+        slot: i32,
+        cancelled: bool,
+        timestamp_micros: u64,
+    ) -> TouchGestureUpdate {
+        self.last_timestamp_micros = timestamp_micros;
         let Some(contact) = self.contacts.remove(&slot) else {
             return TouchGestureUpdate::default();
         };
@@ -837,13 +838,17 @@ impl TouchGestureState {
             consume: contact.captured,
             ..TouchGestureUpdate::default()
         };
-        let Some(gesture) = self.gesture.take() else {
+        let Some(gesture) = self.gesture else {
             return update;
         };
         if !gesture.includes(slot) {
             self.gesture = Some(gesture);
             return update;
         }
+        if let Some(action) = self.finish_swipe(cancelled) {
+            update.actions.push(action);
+        }
+        self.gesture = None;
         if matches!(gesture, Gesture::PinchCandidate { .. }) {
             return update;
         }
@@ -851,17 +856,12 @@ impl TouchGestureState {
         if let Some(action) = gesture.finish_action() {
             update.actions.push(action);
         }
-        if (self.has_captured_window_contact(gesture.window_id())
-            || self.contacts.values().any(|contact| {
-                contact.captured && contact.target.is_some_and(|target| target.gamepad_shell)
-            }))
+        if self.has_captured_window_contact(gesture.window_id())
             && matches!(
                 gesture,
                 Gesture::Pinch { .. }
                     | Gesture::MinimizeSwipe { .. }
-                    | Gesture::ThreeFinger { .. }
-                    | Gesture::GamepadHomeSwipe { .. }
-                    | Gesture::FourFinger { .. }
+                    | Gesture::Swipe { .. }
                     | Gesture::Blocked { .. }
             )
         {
@@ -876,15 +876,20 @@ impl TouchGestureState {
     }
 
     pub(super) fn cancel_all(&mut self) -> Vec<TouchWindowAction> {
-        let actions = self
-            .gesture
-            .take()
-            .and_then(Gesture::finish_action)
-            .into_iter()
-            .filter(|action| matches!(action, TouchWindowAction::Placement { .. }))
-            .collect();
+        let mut actions = self.finish_swipe(true).into_iter().collect::<Vec<_>>();
+        actions.extend(self.gesture.take().and_then(Gesture::finish_action));
         self.contacts.clear();
         actions
+    }
+
+    fn finish_swipe(&mut self, cancelled: bool) -> Option<TouchWindowAction> {
+        let swipe = self.swipe.take()?;
+        let Some(Gesture::Swipe { origin, .. }) = self.gesture else {
+            return None;
+        };
+        swipe
+            .end_event(cancelled, self.last_timestamp_micros)
+            .map(|event| TouchWindowAction::Swipe { event, origin })
     }
 
     fn promote_move_to_two_fingers(
@@ -967,83 +972,74 @@ impl TouchGestureState {
         TouchGestureUpdate::default()
     }
 
-    fn begin_three_finger(
+    fn begin_swipe(
         &mut self,
-        mut slots: Vec<i32>,
-        window_id: u64,
-        gamepad_monitor: Option<i64>,
+        slots: Vec<i32>,
+        newest_target: Option<TouchWindowTarget>,
     ) -> TouchGestureUpdate {
-        slots.sort_unstable();
-        let slots = [slots[0], slots[1], slots[2]];
+        let fingers = slots.len().min(4);
+        let mut swipe_slots = [0; 4];
+        swipe_slots[..fingers].copy_from_slice(&slots[..fingers]);
         let origin = self
-            .three_contact_center(slots)
-            .expect("three-finger contacts disappeared");
-        let actions = self
-            .gesture
-            .take()
-            .and_then(Gesture::finish_action)
-            .into_iter()
-            .filter(|action| matches!(action, TouchWindowAction::Placement { .. }))
-            .collect();
-        let captured_slots = self.capture_slots(&slots);
-        self.gesture = Some(Gesture::ThreeFinger {
-            slots,
-            window_id,
+            .swipe_center(&slots[..fingers])
+            .expect("swipe contacts disappeared");
+        let mut actions = self.finish_swipe(true).into_iter().collect::<Vec<_>>();
+        actions.extend(self.gesture.take().and_then(Gesture::finish_action));
+        // Closing is a window gesture: every contact must start on that window.
+        // Translation is handled by the shared touchpad swipe recognizer.
+        let crush = (fingers == 4)
+            .then(|| {
+                let target = newest_target?;
+                if !slots[..fingers]
+                    .iter()
+                    .all(|slot| self.contacts[slot].belongs_to(Some(target.window_id)))
+                {
+                    return None;
+                }
+                let center = Point::from((
+                    target.geometry.x + target.geometry.width * 0.5,
+                    target.geometry.y + target.geometry.height * 0.5,
+                ));
+                Some(WindowCrush {
+                    window_id: target.window_id,
+                    center,
+                    initial_distances: self.contact_distances(swipe_slots, center)?,
+                    moved: [false; 4],
+                })
+            })
+            .flatten();
+        self.swipe = Some(ActiveSwipe::new(fingers as u32, self.swipe_directions));
+        self.gesture = Some(Gesture::Swipe {
+            slots: swipe_slots,
+            fingers,
             origin,
-            gamepad_monitor,
+            last_center: origin,
+            crush,
         });
         TouchGestureUpdate {
             consume: true,
-            captured_slots,
+            captured_slots: self.capture_slots(&slots),
             actions,
         }
     }
 
-    fn begin_four_finger(
-        &mut self,
-        mut slots: Vec<i32>,
-        target: TouchWindowTarget,
-    ) -> TouchGestureUpdate {
-        slots.sort_unstable();
-        let slots = [slots[0], slots[1], slots[2], slots[3]];
-        let center = Point::from((
-            target.geometry.x + target.geometry.width * 0.5,
-            target.geometry.y + target.geometry.height * 0.5,
-        ));
-        let initial_distances = self
-            .contact_distances(slots, center)
-            .expect("four-finger contacts disappeared");
-        let actions = self
-            .gesture
-            .take()
-            .and_then(Gesture::finish_action)
-            .into_iter()
-            .collect();
-        let captured_slots = self.capture_slots(&slots);
-        self.gesture = Some(Gesture::FourFinger {
-            slots,
-            window_id: target.window_id,
-            center,
-            initial_distances,
-            moved: [false; 4],
-        });
-        TouchGestureUpdate {
-            consume: true,
-            captured_slots,
-            actions,
-        }
-    }
-
-    fn window_slots(&self, window_id: u64) -> Vec<i32> {
+    fn desktop_slots(&self) -> Vec<i32> {
         let mut slots = self
             .contacts
             .iter()
             .filter_map(|(slot, contact)| {
-                contact
-                    .target
-                    .is_some_and(|target| target.window_id == window_id)
-                    .then_some(*slot)
+                (contact.target.is_some() || contact.desktop_background).then_some(*slot)
             })
+            .collect::<Vec<_>>();
+        slots.sort_unstable();
+        slots
+    }
+
+    fn window_slots(&self, window_id: Option<u64>) -> Vec<i32> {
+        let mut slots = self
+            .contacts
+            .iter()
+            .filter_map(|(slot, contact)| contact.belongs_to(window_id).then_some(*slot))
             .collect::<Vec<_>>();
         slots.sort_unstable();
         slots
@@ -1084,14 +1080,16 @@ impl TouchGestureState {
         ])
     }
 
-    fn three_contact_center(&self, slots: [i32; 3]) -> Option<Point<f64, Logical>> {
-        let first = self.contacts.get(&slots[0])?.position;
-        let second = self.contacts.get(&slots[1])?.position;
-        let third = self.contacts.get(&slots[2])?.position;
-        Some(Point::from((
-            (first.x + second.x + third.x) / 3.0,
-            (first.y + second.y + third.y) / 3.0,
-        )))
+    fn swipe_center(&self, slots: &[i32]) -> Option<Point<f64, Logical>> {
+        let mut center = Point::from((0.0, 0.0));
+        for slot in slots {
+            let position = self.contacts.get(slot)?.position;
+            center.x += position.x;
+            center.y += position.y;
+        }
+        center.x /= slots.len() as f64;
+        center.y /= slots.len() as f64;
+        Some(center)
     }
 
     fn contact_distances(&self, slots: [i32; 4], center: Point<f64, Logical>) -> Option<[f64; 4]> {
@@ -1102,13 +1100,21 @@ impl TouchGestureState {
         Some(distances)
     }
 
-    fn has_captured_window_contact(&self, window_id: u64) -> bool {
+    fn has_captured_window_contact(&self, window_id: Option<u64>) -> bool {
         self.contacts.values().any(|contact| {
-            contact.captured
-                && contact
-                    .target
-                    .is_some_and(|target| target.window_id == window_id)
+            contact.captured && (window_id.is_none() || contact.belongs_to(window_id))
         })
+    }
+}
+
+impl Contact {
+    fn belongs_to(self, window_id: Option<u64>) -> bool {
+        match window_id {
+            Some(window_id) => self
+                .target
+                .is_some_and(|target| target.window_id == window_id),
+            None => self.desktop_background,
+        }
     }
 }
 
@@ -1165,7 +1171,7 @@ fn point_distance(first: Point<f64, Logical>, second: Point<f64, Logical>) -> f6
     (second.x - first.x).hypot(second.y - first.y)
 }
 
-fn inward_crush(initial: [f64; 4], current: [f64; 4]) -> bool {
+fn inward_crush(initial: [f64; 4], current: [f64; 4], translation: f64) -> bool {
     let mut total_inward_travel = 0.0;
     for (initial_distance, current_distance) in initial.into_iter().zip(current) {
         let inward_travel = initial_distance - current_distance;
@@ -1174,7 +1180,8 @@ fn inward_crush(initial: [f64; 4], current: [f64; 4]) -> bool {
         }
         total_inward_travel += inward_travel;
     }
-    total_inward_travel / 4.0 >= FOUR_FINGER_CRUSH_DISTANCE
+    let inward = total_inward_travel / 4.0;
+    inward >= FOUR_FINGER_CRUSH_DISTANCE && inward >= translation * PINCH_TRANSLATION_DOMINANCE
 }
 
 pub(super) fn apply_actions(
@@ -1189,6 +1196,12 @@ pub(super) fn apply_actions(
                 change,
                 geometry,
             } => apply_placement(state, window_id, phase, change, geometry),
+            TouchWindowAction::Minimize { window_id } => {
+                window_management::minimize_toplevel_by_id(state, window_id);
+            }
+            TouchWindowAction::Close { window_id } => {
+                window_management::close_toplevel_by_id(state, window_id);
+            }
             TouchWindowAction::EdgeResize {
                 window_id,
                 phase,
@@ -1196,42 +1209,11 @@ pub(super) fn apply_actions(
                 delta_x,
                 delta_y,
             } => apply_edge_resize(state, window_id, phase, edges, delta_x, delta_y),
-            TouchWindowAction::Minimize { window_id } => {
-                window_management::minimize_toplevel_by_id(state, window_id);
+            TouchWindowAction::Overview => {
+                state.queue_shell_action(super::super::wire::ShellAction::Overview, None);
             }
-            TouchWindowAction::Close { window_id } => {
-                window_management::close_toplevel_by_id(state, window_id);
-            }
-            TouchWindowAction::Shell(action) => {
-                state.queue_shell_action(action, None);
-            }
-            TouchWindowAction::Navigate {
-                monitor_id,
-                direction,
-            } => {
-                if matches!(direction, LayoutDirection::Left | LayoutDirection::Right) {
-                    super::input::execute_shortcut_disposition(
-                        state,
-                        ShortcutDisposition::RequestFocus(direction),
-                    );
-                } else {
-                    let delta = if direction == LayoutDirection::Down {
-                        1
-                    } else {
-                        -1
-                    };
-                    let workspace = state
-                        .wayland
-                        .as_ref()
-                        .and_then(|frontend| frontend.adjacent_workspace(monitor_id, delta));
-                    if let Some(workspace) = workspace {
-                        window_management::switch_monitor_workspace(state, monitor_id, workspace);
-                    }
-                }
-            }
-            TouchWindowAction::Gesture(gesture) => {
-                let disposition = state.native_escape_shortcut.observe_gesture(gesture);
-                super::input::execute_shortcut_disposition(state, disposition);
+            TouchWindowAction::Swipe { event, origin } => {
+                super::input::dispatch_swipe_gesture(state, event, Some(origin));
             }
         }
     }
@@ -1272,29 +1254,62 @@ fn apply_placement(
     else {
         return;
     };
-    if change == WindowPlacementChange::Resize
-        && state
-            .wayland
-            .as_ref()
-            .is_some_and(|frontend| frontend.window_is_layout_managed(&window))
-    {
-        apply_layout_resize_placement(state, &window, phase, geometry);
+    let layout_managed = state
+        .wayland
+        .as_ref()
+        .is_some_and(|frontend| frontend.window_is_layout_managed(&window));
+    if layout_managed {
+        match change {
+            WindowPlacementChange::Move => apply_layout_move_placement(state, &window, phase),
+            WindowPlacementChange::Resize => {
+                apply_layout_resize_placement(state, &window, phase, geometry)
+            }
+            WindowPlacementChange::LayoutPreview => {
+                unreachable!("touch gestures do not emit layout previews")
+            }
+        }
         return;
     }
     if phase == WindowPlacementPhase::Begin {
-        let constraints_cleared = release_geometry_constraints(state, &window);
+        // Use the same restore/state handshake as SUPER+LMB/RMB. Otherwise a
+        // maximized or mobile target can survive until the next client commit.
+        super::input::release_client_geometry_for_shell_grab(state, &window);
         window_management::activate_window(state, &window, SERIAL_COUNTER.next_serial());
-        if constraints_cleared
-            && change == WindowPlacementChange::Move
-            && let Some(managed) = ManagedWindow::new(&window)
-        {
-            let size = Size::from((rounded_i32(geometry.width), rounded_i32(geometry.height)));
-            managed.prepare_restore_size(size, false);
-        }
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        let restored = frontend.window_geometry_target(&window);
+        frontend.touch_gestures.placement_transform = Some((
+            window_id,
+            PlacementTransform {
+                source: geometry,
+                restored: WindowGeometry {
+                    x: f64::from(restored.loc.x),
+                    y: f64::from(restored.loc.y),
+                    width: f64::from(restored.size.w),
+                    height: f64::from(restored.size.h),
+                },
+            },
+        ));
+    }
+    let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+    let geometry = frontend
+        .touch_gestures
+        .placement_transform
+        .filter(|(id, _)| *id == window_id)
+        .map_or(geometry, |(_, transform)| transform.apply(geometry, change));
+    if phase == WindowPlacementPhase::End {
+        frontend.touch_gestures.placement_transform = None;
     }
     let geometry = constrain_client_geometry(&window, geometry, change);
     if change == WindowPlacementChange::Resize {
-        configure_client_resize(&window, geometry.size, phase);
+        state
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .prepare_window_interactive_resize(
+                &window,
+                geometry.size,
+                phase == WindowPlacementPhase::End,
+            );
     }
     state
         .wayland
@@ -1307,6 +1322,78 @@ fn apply_placement(
     }
 }
 
+fn apply_layout_move_placement(
+    state: &mut RuntimeState,
+    window: &Window,
+    phase: WindowPlacementPhase,
+) {
+    let position = {
+        let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
+        match frontend.touch_gestures.gesture {
+            Some(Gesture::Move { slot, origin, .. }) => {
+                if phase == WindowPlacementPhase::Begin {
+                    Some(origin)
+                } else {
+                    frontend
+                        .touch_gestures
+                        .contacts
+                        .get(&slot)
+                        .map(|contact| contact.position)
+                }
+            }
+            _ => None,
+        }
+    };
+    if phase == WindowPlacementPhase::Begin {
+        let Some(position) = position else {
+            return;
+        };
+        super::input::release_client_geometry_for_shell_grab(state, window);
+        window_management::activate_window(state, window, SERIAL_COUNTER.next_serial());
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        let geometry = frontend.window_geometry_target(window);
+        frontend.touch_gestures.layout_move = Some(TileMoveGrab::new(
+            smithay::input::pointer::GrabStartData {
+                focus: None,
+                button: 0,
+                location: position,
+            },
+            window.clone(),
+            geometry,
+        ));
+        window_management::queue_transient_window_placement(
+            state,
+            window,
+            geometry,
+            phase,
+            WindowPlacementChange::Move,
+        );
+        return;
+    }
+    let Some(mut grab) = state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .touch_gestures
+        .layout_move
+        .take()
+    else {
+        return;
+    };
+    if phase == WindowPlacementPhase::End
+        || position.is_some_and(|position| !grab.update(state, position))
+    {
+        grab.finish(state);
+    } else {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .touch_gestures
+            .layout_move = Some(grab);
+    }
+}
+
 fn apply_layout_resize_placement(
     state: &mut RuntimeState,
     window: &Window,
@@ -1315,7 +1402,7 @@ fn apply_layout_resize_placement(
 ) {
     match phase {
         WindowPlacementPhase::Begin => {
-            release_geometry_constraints(state, window);
+            super::input::release_client_geometry_for_shell_grab(state, window);
             window_management::activate_window(state, window, SERIAL_COUNTER.next_serial());
             let geometry = state
                 .wayland
@@ -1471,128 +1558,6 @@ fn layout_pinch_delta(
     }
 }
 
-/// Hit-test both sides of a real tile border, including the margin exposed
-/// between the window and the work-area edge. Returns `None` when the contact
-/// is inside the window body (a client tap) rather than on a border band.
-pub(super) fn gamepad_resize_edges(
-    position: Point<f64, Logical>,
-    geometry: Rectangle<i32, Logical>,
-) -> Option<LayoutResizeEdges> {
-    const BAND: f64 = 16.0;
-    let left = f64::from(geometry.loc.x);
-    let top = f64::from(geometry.loc.y);
-    let right = left + f64::from(geometry.size.w);
-    let bottom = top + f64::from(geometry.size.h);
-    if position.x < left - BAND
-        || position.x > right + BAND
-        || position.y < top - BAND
-        || position.y > bottom + BAND
-    {
-        return None;
-    }
-    let edges = LayoutResizeEdges {
-        left: (position.x - left).abs() <= BAND,
-        right: (position.x - right).abs() <= BAND,
-        top: (position.y - top).abs() <= BAND,
-        bottom: (position.y - bottom).abs() <= BAND,
-    };
-    (edges.left || edges.right || edges.top || edges.bottom).then_some(edges)
-}
-
-/// Apply one gamepad tile edge drag. Splits share their boundary through the
-/// layout; a squeezed-out sibling is backgrounded by the caller's resize path.
-fn apply_edge_resize(
-    state: &mut RuntimeState,
-    window_id: u64,
-    phase: WindowPlacementPhase,
-    edges: LayoutResizeEdges,
-    delta_x: f64,
-    delta_y: f64,
-) {
-    let Some(window) = state
-        .wayland
-        .as_ref()
-        .and_then(|frontend| frontend.window_for_id(window_id))
-    else {
-        return;
-    };
-    let managed = state.wayland.as_ref().is_some_and(|frontend| {
-        frontend.gamepad_shell() && frontend.window_is_layout_managed(&window)
-    });
-    if !managed {
-        return;
-    }
-    if phase == WindowPlacementPhase::Begin {
-        release_geometry_constraints(state, &window);
-        window_management::activate_window(state, &window, SERIAL_COUNTER.next_serial());
-        // Capture the pre-drag geometry so an eviction can restore it.
-        state
-            .wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .snapshot_gamepad_single_geometry(window_id);
-    }
-    if phase == WindowPlacementPhase::Update {
-        state
-            .wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .resize_layout_window(&window, edges, delta_x, delta_y);
-        // A resize that squeezes a pane out of existence backgrounds it. This
-        // includes the dragged window itself: dragging its own border until it
-        // is (almost) gone closes it to the background, for both a split pane
-        // and a lone exclusive tile.
-        let squeezed = state
-            .wayland
-            .as_ref()
-            .expect("missing Wayland frontend")
-            .layout_siblings_squeezed_out(&window);
-        for squeezed_id in squeezed {
-            // Restore the pre-drag geometry so a later restore returns the
-            // tile's size before the drag, not the squeezed sliver.
-            state
-                .wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .restore_gamepad_single_geometry(squeezed_id);
-            window_management::minimize_toplevel_by_id(state, squeezed_id);
-        }
-    }
-    // Read the placements after any evictions so the collapsed layout is the
-    // one published, not a stale pre-collapse vector.
-    let placements = state
-        .wayland
-        .as_ref()
-        .expect("missing Wayland frontend")
-        .layout_window_geometries(&window);
-    for (affected, geometry) in placements {
-        window_management::queue_transient_window_placement(
-            state,
-            &affected,
-            geometry,
-            phase,
-            WindowPlacementChange::Resize,
-        );
-    }
-    state.scene_sync.mark_dirty();
-}
-
-fn release_geometry_constraints(state: &mut RuntimeState, window: &Window) -> bool {
-    let client_cleared = window_management::clear_client_geometry_constraints(window);
-    let root = state
-        .wayland
-        .as_ref()
-        .and_then(|frontend| frontend.window_root_surface(window));
-    let Some(root) = root else {
-        return client_cleared;
-    };
-    let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-    let surface_id = root.id();
-    let shell_owned = frontend.take_shell_presentation(&surface_id).is_some();
-    frontend.clear_restore_geometry(&surface_id);
-    client_cleared || shell_owned
-}
-
 fn constrain_local_geometry(
     geometry: WindowGeometry,
     change: WindowPlacementChange,
@@ -1615,8 +1580,6 @@ fn constrain_client_geometry(
     geometry: WindowGeometry,
     change: WindowPlacementChange,
 ) -> Rectangle<i32, Logical> {
-    let requested =
-        Size::<i32, Logical>::from((rounded_i32(geometry.width), rounded_i32(geometry.height)));
     let (minimum, maximum): (Size<i32, Logical>, Size<i32, Logical>) = ManagedWindow::new(window)
         .map_or_else(
             || (Size::from((1, 1)), Size::from((0, 0))),
@@ -1628,10 +1591,30 @@ fn constrain_client_geometry(
                 )
             },
         );
-    let size = Size::from((
-        constrain_dimension(requested.w, minimum.w, maximum.w),
-        constrain_dimension(requested.h, minimum.h, maximum.h),
+    client_geometry_with_constraints(geometry, change, minimum, maximum)
+}
+
+fn client_geometry_with_constraints(
+    geometry: WindowGeometry,
+    change: WindowPlacementChange,
+    minimum: Size<i32, Logical>,
+    maximum: Size<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    let requested = Size::<i32, Logical>::from((
+        rounded_i32(geometry.width).max(1),
+        rounded_i32(geometry.height).max(1),
     ));
+    // A corner drag only translates the existing window. Client size hints
+    // may disagree with that size (for example after a maximize/restore), but
+    // must not turn movement into a resize when the final placement settles.
+    let size = if change == WindowPlacementChange::Resize {
+        Size::from((
+            constrain_dimension(requested.w, minimum.w, maximum.w),
+            constrain_dimension(requested.h, minimum.h, maximum.h),
+        ))
+    } else {
+        requested
+    };
     let location = if change == WindowPlacementChange::Resize {
         Point::from((
             rounded_i32(geometry.x + (geometry.width - f64::from(size.w)) * 0.5),
@@ -1641,12 +1624,6 @@ fn constrain_client_geometry(
         Point::from((rounded_i32(geometry.x), rounded_i32(geometry.y)))
     };
     Rectangle::new(location, size)
-}
-
-fn configure_client_resize(window: &Window, size: Size<i32, Logical>, phase: WindowPlacementPhase) {
-    if let Some(managed) = ManagedWindow::new(window) {
-        managed.prepare_interactive_resize(size, phase == WindowPlacementPhase::End);
-    }
 }
 
 fn centered_geometry(geometry: WindowGeometry, width: f64, height: f64) -> WindowGeometry {
@@ -1676,8 +1653,102 @@ fn rounded_i32(value: f64) -> i32 {
     }
 }
 
+pub(super) fn gamepad_resize_edges(
+    position: Point<f64, Logical>,
+    geometry: Rectangle<i32, Logical>,
+) -> Option<LayoutResizeEdges> {
+    const BAND: f64 = 16.0;
+    let left = f64::from(geometry.loc.x);
+    let top = f64::from(geometry.loc.y);
+    let right = left + f64::from(geometry.size.w);
+    let bottom = top + f64::from(geometry.size.h);
+    if position.x < left - BAND
+        || position.x > right + BAND
+        || position.y < top - BAND
+        || position.y > bottom + BAND
+    {
+        return None;
+    }
+    let edges = LayoutResizeEdges {
+        left: (position.x - left).abs() <= BAND,
+        right: (position.x - right).abs() <= BAND,
+        top: (position.y - top).abs() <= BAND,
+        bottom: (position.y - bottom).abs() <= BAND,
+    };
+    (edges.left || edges.right || edges.top || edges.bottom).then_some(edges)
+}
+
+/// Apply one gamepad tile edge drag on top of main's shared swipe routing.
+fn apply_edge_resize(
+    state: &mut RuntimeState,
+    window_id: u64,
+    phase: WindowPlacementPhase,
+    edges: LayoutResizeEdges,
+    delta_x: f64,
+    delta_y: f64,
+) {
+    let Some(window) = state
+        .wayland
+        .as_ref()
+        .and_then(|frontend| frontend.window_for_id(window_id))
+    else {
+        return;
+    };
+    let managed = state.wayland.as_ref().is_some_and(|frontend| {
+        frontend.gamepad_shell() && frontend.window_is_layout_managed(&window)
+    });
+    if !managed {
+        return;
+    }
+    if phase == WindowPlacementPhase::Begin {
+        super::input::release_client_geometry_for_shell_grab(state, &window);
+        window_management::activate_window(state, &window, SERIAL_COUNTER.next_serial());
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .snapshot_gamepad_single_geometry(window_id);
+    }
+    if phase == WindowPlacementPhase::Update {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .resize_layout_window(&window, edges, delta_x, delta_y);
+        let squeezed = state
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .layout_siblings_squeezed_out(&window);
+        for squeezed_id in squeezed {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .restore_gamepad_single_geometry(squeezed_id);
+            window_management::minimize_toplevel_by_id(state, squeezed_id);
+        }
+    }
+    let placements = state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .layout_window_geometries(&window);
+    for (affected, geometry) in placements {
+        window_management::queue_transient_window_placement(
+            state,
+            &affected,
+            geometry,
+            phase,
+            WindowPlacementChange::Resize,
+        );
+    }
+    state.scene_sync.mark_dirty();
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::super::native_shortcut::ShortcutGesture;
     use super::*;
 
     fn target(in_move_corner: bool, geometry_locked: bool) -> TouchWindowTarget {
@@ -1698,125 +1769,545 @@ mod tests {
         }
     }
 
-    fn gamepad_target() -> TouchWindowTarget {
-        TouchWindowTarget {
-            gamepad_shell: true,
-            geometry_locked: true,
-            monitor_id: 1,
-            ..target(false, true)
+    fn begin_desktop_swipe(gestures: &mut TouchGestureState) {
+        for slot in 0..2 {
+            assert_eq!(
+                gestures
+                    .down_on_desktop(slot, Point::from((200.0 + f64::from(slot) * 100.0, 400.0))),
+                TouchGestureUpdate::default()
+            );
+        }
+        let third = gestures.down_on_desktop(2, Point::from((400.0, 400.0)));
+        assert!(third.consume);
+        assert_eq!(third.captured_slots, [0, 1, 2]);
+        assert!(third.actions.is_empty());
+    }
+
+    fn move_three_contacts(
+        gestures: &mut TouchGestureState,
+        delta: (f64, f64),
+    ) -> Vec<TouchWindowAction> {
+        (0..3)
+            .flat_map(|slot| {
+                gestures
+                    .motion(
+                        slot,
+                        Point::from((200.0 + f64::from(slot) * 100.0 + delta.0, 400.0 + delta.1)),
+                    )
+                    .actions
+            })
+            .collect()
+    }
+
+    fn begin_workspace_swipe(gestures: &mut TouchGestureState, context: usize) {
+        for slot in 0..4 {
+            let position = Point::from((200.0 + f64::from(slot) * 50.0, 400.0));
+            let update = if context == 0 || (context == 2 && slot == 3) {
+                gestures.down_on_desktop(slot, position)
+            } else {
+                let mut window = target(false, true);
+                if context == 2 {
+                    window.window_id += slot as u64;
+                }
+                gestures.down(slot, position, Some(window))
+            };
+            if slot == 2 {
+                assert_eq!(update.captured_slots, [0, 1, 2]);
+            } else if slot == 3 {
+                assert_eq!(update.captured_slots, [3]);
+            }
+            assert!(update.actions.is_empty());
+        }
+    }
+
+    fn move_four_contacts(
+        gestures: &mut TouchGestureState,
+        delta: (f64, f64),
+    ) -> Vec<TouchWindowAction> {
+        (0..4)
+            .flat_map(|slot| {
+                gestures
+                    .motion_at(
+                        slot,
+                        Point::from((200.0 + f64::from(slot) * 50.0 + delta.0, 400.0 + delta.1)),
+                        10_000 + slot as u64 * 1_000,
+                    )
+                    .actions
+            })
+            .collect()
+    }
+
+    #[test]
+    fn workspace_swipes_share_touchpad_bindings_on_windows_background_and_across_tiles() {
+        use super::super::super::native_shortcut::{ShortcutDisposition, ShortcutEngine};
+
+        for context in 0..3 {
+            for (delta, gesture, disposition) in [
+                (
+                    (-120.0, 0.0),
+                    ShortcutGesture::FourFingerSwipeLeft,
+                    ShortcutDisposition::RequestNextWorkspace,
+                ),
+                (
+                    (120.0, 0.0),
+                    ShortcutGesture::FourFingerSwipeRight,
+                    ShortcutDisposition::RequestPreviousWorkspace,
+                ),
+                (
+                    (0.0, -120.0),
+                    ShortcutGesture::FourFingerSwipeUp,
+                    ShortcutDisposition::RequestNextWorkspace,
+                ),
+                (
+                    (0.0, 120.0),
+                    ShortcutGesture::FourFingerSwipeDown,
+                    ShortcutDisposition::RequestPreviousWorkspace,
+                ),
+            ] {
+                let mut gestures = TouchGestureState::default();
+                begin_workspace_swipe(&mut gestures, context);
+                let origin = Point::from((275.0, 400.0));
+                assert_eq!(
+                    move_four_contacts(&mut gestures, delta),
+                    [TouchWindowAction::Swipe {
+                        event: TouchpadGestureEvent::Trigger(gesture),
+                        origin,
+                    }]
+                );
+                assert_eq!(
+                    ShortcutEngine::default().observe_gesture(gesture),
+                    disposition
+                );
+                assert!(
+                    move_four_contacts(&mut gestures, (delta.0 * 3.0, delta.1 * 3.0)).is_empty()
+                );
+                assert_eq!(
+                    gestures.up_at(0, 30_000).actions,
+                    [TouchWindowAction::Swipe {
+                        event: TouchpadGestureEvent::End(gesture),
+                        origin,
+                    }]
+                );
+                for slot in 1..4 {
+                    let end = gestures.up_at(slot, 31_000 + slot as u64);
+                    assert!(end.consume);
+                    assert!(end.actions.is_empty());
+                }
+                assert!(gestures.gesture.is_none());
+                assert!(gestures.contacts.is_empty());
+            }
         }
     }
 
     #[test]
-    fn gamepad_bottom_tap_is_not_captured() {
-        let mut gestures = TouchGestureState::default();
-        let target = TouchWindowTarget {
-            in_gesture_strip: true,
-            ..gamepad_target()
-        };
-        assert_eq!(
-            gestures.down(1, (200.0, 590.0).into(), Some(target)),
-            TouchGestureUpdate::default()
-        );
-        assert_eq!(gestures.up(1), TouchGestureUpdate::default());
-    }
-
-    #[test]
-    fn gamepad_short_swipe_cancels_old_route_then_minimizes_on_release() {
-        let mut gestures = TouchGestureState::default();
-        let target = TouchWindowTarget {
-            in_gesture_strip: true,
-            ..gamepad_target()
-        };
-        gestures.down(1, (200.0, 590.0).into(), Some(target));
-        let captured = gestures.motion(1, (200.0, 490.0).into());
-        assert!(captured.consume);
-        assert_eq!(captured.captured_slots, [1]);
-        assert!(captured.actions.is_empty());
-        assert_eq!(
-            gestures.up(1).actions,
-            [TouchWindowAction::Minimize { window_id: 7 }]
-        );
-    }
-
-    #[test]
-    fn gamepad_long_swipe_opens_overview_once_without_minimizing() {
-        let mut gestures = TouchGestureState::default();
-        let target = TouchWindowTarget {
-            in_gesture_strip: true,
-            ..gamepad_target()
-        };
-        gestures.down(1, (200.0, 590.0).into(), Some(target));
-        let captured = gestures.motion(1, (200.0, 380.0).into());
-        assert_eq!(captured.captured_slots, [1]);
-        assert_eq!(
-            captured.actions,
-            [TouchWindowAction::Shell(ShellAction::Overview)]
-        );
-        assert!(gestures.motion(1, (200.0, 300.0).into()).actions.is_empty());
-        assert!(gestures.up(1).actions.is_empty());
-    }
-
-    #[test]
-    fn gamepad_cancel_never_minimizes() {
-        let mut gestures = TouchGestureState::default();
-        let target = TouchWindowTarget {
-            in_gesture_strip: true,
-            ..gamepad_target()
-        };
-        gestures.down(1, (200.0, 590.0).into(), Some(target));
-        gestures.motion(1, (200.0, 490.0).into());
-        assert!(gestures.cancel(1).actions.is_empty());
-    }
-
-    #[test]
-    fn gamepad_three_fingers_navigate_across_different_window_targets() {
-        for (delta, direction) in [
-            ((-120.0, 0.0), LayoutDirection::Right),
-            ((120.0, 0.0), LayoutDirection::Left),
-            ((0.0, -120.0), LayoutDirection::Down),
-            ((0.0, 120.0), LayoutDirection::Up),
-        ] {
+    fn workspace_swipes_reject_short_and_diagonal_motion() {
+        for delta in [(90.0, 0.0), (0.0, -90.0), (120.0, 100.0), (-100.0, -120.0)] {
             let mut gestures = TouchGestureState::default();
-            for slot in 1..=3 {
-                let target = TouchWindowTarget {
-                    window_id: slot as u64,
-                    ..gamepad_target()
+            begin_workspace_swipe(&mut gestures, 0);
+            assert!(move_four_contacts(&mut gestures, delta).is_empty());
+            assert!(gestures.cancel_all().is_empty());
+        }
+    }
+
+    #[test]
+    fn horizontal_window_navigation_ends_on_release_or_cancellation() {
+        use super::super::super::native_shortcut::{ShortcutDisposition, ShortcutEngine};
+
+        for cancelled in [false, true] {
+            for (delta, gesture, disposition) in [
+                (
+                    -120.0,
+                    ShortcutGesture::ThreeFingerSwipeLeft,
+                    ShortcutDisposition::RequestWindowSwitcherNext,
+                ),
+                (
+                    120.0,
+                    ShortcutGesture::ThreeFingerSwipeRight,
+                    ShortcutDisposition::RequestWindowSwitcherPrevious,
+                ),
+            ] {
+                let mut gestures = TouchGestureState::default();
+                begin_desktop_swipe(&mut gestures);
+                assert_eq!(
+                    move_three_contacts(&mut gestures, (delta, 0.0)),
+                    [TouchWindowAction::Swipe {
+                        event: TouchpadGestureEvent::Trigger(gesture),
+                        origin: Point::from((300.0, 400.0)),
+                    }]
+                );
+                let mut shortcuts = ShortcutEngine::default();
+                assert_eq!(shortcuts.observe_gesture(gesture), disposition);
+                let end = if cancelled {
+                    gestures.cancel(0)
+                } else {
+                    gestures.up(0)
                 };
-                let update = gestures.down(slot, (200.0, 400.0).into(), Some(target));
-                if slot == 3 {
-                    assert_eq!(update.captured_slots, [1, 2, 3]);
+                assert_eq!(
+                    end.actions,
+                    [TouchWindowAction::Swipe {
+                        event: TouchpadGestureEvent::End(gesture),
+                        origin: Point::from((300.0, 400.0)),
+                    }]
+                );
+                assert_eq!(
+                    shortcuts.end_gesture(gesture),
+                    ShortcutDisposition::RequestWindowSwitcherEnd { forward: false }
+                );
+                assert!(move_three_contacts(&mut gestures, (delta * 2.0, 0.0)).is_empty());
+                assert!(gestures.cancel_all().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn scrolling_layout_touch_streams_motion_before_release_and_then_settles() {
+        let mut gestures = TouchGestureState::default();
+        gestures.set_swipe_directions(HorizontalScrollDirections {
+            left: true,
+            right: true,
+        });
+        begin_desktop_swipe(&mut gestures);
+        let mut events = Vec::new();
+        for slot in 0..3 {
+            events.extend(
+                gestures
+                    .motion_at(
+                        slot,
+                        Point::from((170.0 + f64::from(slot) * 100.0, 400.0)),
+                        10_000 + slot as u64 * 10_000,
+                    )
+                    .actions,
+            );
+        }
+        let origin = Point::from((300.0, 400.0));
+        assert_eq!(
+            events,
+            [
+                TouchWindowAction::Swipe {
+                    event: TouchpadGestureEvent::HorizontalScrollBegin { delta_x: -10.0 },
+                    origin
+                },
+                TouchWindowAction::Swipe {
+                    event: TouchpadGestureEvent::HorizontalScrollUpdate { delta_x: -10.0 },
+                    origin
+                },
+                TouchWindowAction::Swipe {
+                    event: TouchpadGestureEvent::HorizontalScrollUpdate { delta_x: -10.0 },
+                    origin
+                },
+            ]
+        );
+        assert_eq!(
+            gestures.up_at(0, 300_000).actions,
+            [TouchWindowAction::Swipe {
+                event: TouchpadGestureEvent::HorizontalScrollEnd {
+                    cancelled: false,
+                    projected_delta_x: -30.0
+                },
+                origin,
+            }]
+        );
+        assert!(gestures.cancel_all().is_empty());
+    }
+
+    #[test]
+    fn scrolling_layout_touch_honors_enabled_directions_and_cancels_on_device_reset() {
+        let mut gestures = TouchGestureState::default();
+        gestures.set_swipe_directions(HorizontalScrollDirections {
+            left: false,
+            right: true,
+        });
+        begin_desktop_swipe(&mut gestures);
+        assert!(move_three_contacts(&mut gestures, (-30.0, 0.0)).is_empty());
+        let events = move_three_contacts(&mut gestures, (-120.0, 0.0));
+        assert!(matches!(
+            events.as_slice(),
+            [TouchWindowAction::Swipe {
+                event: TouchpadGestureEvent::Trigger(ShortcutGesture::ThreeFingerSwipeLeft),
+                ..
+            }]
+        ));
+        gestures.cancel_all();
+
+        begin_desktop_swipe(&mut gestures);
+        assert!(!move_three_contacts(&mut gestures, (30.0, 0.0)).is_empty());
+        assert!(matches!(
+            gestures.cancel_all().as_slice(),
+            [TouchWindowAction::Swipe {
+                event: TouchpadGestureEvent::HorizontalScrollEnd {
+                    cancelled: true,
+                    ..
+                },
+                ..
+            }]
+        ));
+        assert!(gestures.contacts.is_empty());
+        assert!(gestures.gesture.is_none());
+        assert!(gestures.swipe.is_none());
+    }
+
+    #[test]
+    fn global_swipe_keeps_mixed_contacts_captured_until_every_finger_is_lifted() {
+        let mut gestures = TouchGestureState::default();
+        begin_workspace_swipe(&mut gestures, 2);
+        move_four_contacts(&mut gestures, (-120.0, 0.0));
+        assert!(gestures.up(3).consume);
+        let extra = gestures.down(4, Point::from((500.0, 400.0)), Some(target(false, true)));
+        assert!(extra.consume);
+        assert_eq!(extra.captured_slots, [4]);
+        for slot in 0..3 {
+            assert!(gestures.up(slot).consume);
+        }
+        assert!(gestures.gesture.is_some());
+        assert!(gestures.up(4).consume);
+        assert!(gestures.gesture.is_none());
+        assert!(gestures.contacts.is_empty());
+    }
+
+    #[test]
+    fn third_contact_promotes_an_active_window_resize_and_finishes_its_placement() {
+        let mut gestures = TouchGestureState::default();
+        let window = target(false, false);
+        gestures.down(0, Point::from((200.0, 300.0)), Some(window));
+        gestures.down(1, Point::from((300.0, 500.0)), Some(window));
+        assert!(!gestures.motion(0, Point::from((180.0, 280.0))).consume);
+        let resize = gestures.motion(1, Point::from((320.0, 520.0)));
+        assert!(resize.consume);
+        assert_eq!(resize.captured_slots, [0, 1]);
+        assert!(matches!(
+            resize.actions.as_slice(),
+            [
+                TouchWindowAction::Placement {
+                    phase: WindowPlacementPhase::Begin,
+                    change: WindowPlacementChange::Resize,
+                    ..
+                },
+                TouchWindowAction::Placement {
+                    phase: WindowPlacementPhase::Update,
+                    change: WindowPlacementChange::Resize,
+                    ..
+                },
+            ]
+        ));
+        let third = gestures.down_on_desktop(2, Point::from((400.0, 400.0)));
+        assert!(third.consume);
+        assert_eq!(third.captured_slots, [2]);
+        assert!(matches!(
+            third.actions.as_slice(),
+            [TouchWindowAction::Placement {
+                window_id: 7,
+                phase: WindowPlacementPhase::End,
+                change: WindowPlacementChange::Resize,
+                ..
+            }]
+        ));
+        let mut actions = Vec::new();
+        for (slot, position) in [
+            (0, (180.0, 130.0)),
+            (1, (320.0, 370.0)),
+            (2, (400.0, 250.0)),
+        ] {
+            actions.extend(gestures.motion(slot, Point::from(position)).actions);
+        }
+        assert!(matches!(
+            actions.as_slice(),
+            [TouchWindowAction::Swipe {
+                event: TouchpadGestureEvent::Trigger(ShortcutGesture::ThreeFingerSwipeUp),
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn an_extra_contact_does_not_promote_a_swipe_after_it_has_triggered() {
+        let mut gestures = TouchGestureState::default();
+        begin_desktop_swipe(&mut gestures);
+        move_three_contacts(&mut gestures, (120.0, 0.0));
+        let extra = gestures.down_on_desktop(3, Point::from((500.0, 400.0)));
+        assert_eq!(extra.captured_slots, [3]);
+        assert!(extra.actions.is_empty());
+        assert!(gestures.up(3).actions.is_empty());
+        assert!(matches!(
+            gestures.up(0).actions.as_slice(),
+            [TouchWindowAction::Swipe {
+                event: TouchpadGestureEvent::End(ShortcutGesture::ThreeFingerSwipeRight),
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn four_finger_translation_toward_window_center_switches_workspace_instead_of_closing() {
+        let mut gestures = TouchGestureState::default();
+        for slot in 0..4 {
+            gestures.down(
+                slot,
+                Point::from((120.0 + f64::from(slot) * 10.0, 280.0)),
+                Some(target(false, true)),
+            );
+        }
+        let mut actions = Vec::new();
+        for slot in 0..4 {
+            actions.extend(
+                gestures
+                    .motion(slot, Point::from((240.0 + f64::from(slot) * 10.0, 280.0)))
+                    .actions,
+            );
+        }
+        assert!(matches!(
+            actions.as_slice(),
+            [TouchWindowAction::Swipe {
+                event: TouchpadGestureEvent::Trigger(ShortcutGesture::FourFingerSwipeRight),
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn empty_desktop_swipe_emits_the_same_overview_shortcut_as_a_window_swipe() {
+        use super::super::super::native_shortcut::{ShortcutDisposition, ShortcutEngine};
+
+        for on_desktop in [true, false] {
+            let mut gestures = TouchGestureState::default();
+            if on_desktop {
+                begin_desktop_swipe(&mut gestures);
+            } else {
+                for slot in 0..3 {
+                    gestures.down(
+                        slot,
+                        Point::from((200.0 + f64::from(slot) * 100.0, 400.0)),
+                        Some(target(false, false)),
+                    );
                 }
             }
-            let mut actions = Vec::new();
-            for slot in 1..=3 {
-                actions.extend(
-                    gestures
-                        .motion(slot, (200.0 + delta.0, 400.0 + delta.1).into())
-                        .actions,
-                );
-            }
+            let actions = move_three_contacts(&mut gestures, (0.0, -150.0));
             assert_eq!(
                 actions,
-                [TouchWindowAction::Navigate {
-                    monitor_id: 1,
-                    direction
+                [TouchWindowAction::Swipe {
+                    event: TouchpadGestureEvent::Trigger(ShortcutGesture::ThreeFingerSwipeUp),
+                    origin: Point::from((300.0, 400.0)),
                 }]
+            );
+            let mut shortcuts = ShortcutEngine::default();
+            assert_eq!(
+                shortcuts.observe_gesture(ShortcutGesture::ThreeFingerSwipeUp),
+                ShortcutDisposition::RequestOverview
             );
         }
     }
 
     #[test]
-    fn gamepad_center_and_corner_contacts_never_move_or_resize() {
+    fn desktop_swipe_fires_once_and_releases_every_captured_contact() {
         let mut gestures = TouchGestureState::default();
-        let target = TouchWindowTarget {
-            in_move_corner: true,
-            ..gamepad_target()
-        };
-        gestures.down(1, (110.0, 210.0).into(), Some(target));
-        assert!(gestures.motion(1, (150.0, 250.0).into()).actions.is_empty());
-        gestures.down(2, (350.0, 350.0).into(), Some(target));
-        assert!(gestures.motion(2, (400.0, 400.0).into()).actions.is_empty());
+        begin_desktop_swipe(&mut gestures);
+        assert_eq!(move_three_contacts(&mut gestures, (0.0, -150.0)).len(), 1);
+        assert!(move_three_contacts(&mut gestures, (0.0, -300.0)).is_empty());
+        assert!(gestures.up(0).consume);
+        let extra = gestures.down_on_desktop(3, Point::from((500.0, 250.0)));
+        assert!(extra.consume);
+        assert_eq!(extra.captured_slots, [3]);
+        assert!(gestures.cancel(1).consume);
+        assert!(
+            gestures
+                .motion(2, Point::from((400.0, 0.0)))
+                .actions
+                .is_empty()
+        );
+        assert!(gestures.up(2).consume);
+        assert!(gestures.up(3).consume);
+        assert!(gestures.gesture.is_none());
+        assert!(gestures.contacts.is_empty());
+
+        begin_desktop_swipe(&mut gestures);
+        assert_eq!(move_three_contacts(&mut gestures, (0.0, -150.0)).len(), 1);
+    }
+
+    #[test]
+    fn desktop_single_and_two_finger_input_still_reaches_flutter() {
+        let mut gestures = TouchGestureState::default();
+        for slot in 0..2 {
+            assert_eq!(
+                gestures
+                    .down_on_desktop(slot, Point::from((200.0 + f64::from(slot) * 100.0, 400.0))),
+                TouchGestureUpdate::default()
+            );
+            assert_eq!(
+                gestures.motion(slot, Point::from((250.0, 200.0))),
+                TouchGestureUpdate::default()
+            );
+        }
+        assert_eq!(gestures.up(0), TouchGestureUpdate::default());
+        assert_eq!(gestures.up(1), TouchGestureUpdate::default());
+    }
+
+    #[test]
+    fn desktop_swipe_rejects_short_diagonal_and_unsupported_motion() {
+        for delta in [(0.0, -90.0), (0.0, 150.0), (150.0, -120.0)] {
+            let mut gestures = TouchGestureState::default();
+            begin_desktop_swipe(&mut gestures);
+            assert!(move_three_contacts(&mut gestures, delta).is_empty());
+        }
+    }
+
+    #[test]
+    fn unavailable_contacts_never_join_a_desktop_swipe() {
+        let mut gestures = TouchGestureState::default();
+        for slot in 0..3 {
+            assert_eq!(
+                gestures.down(slot, Point::from((200.0, 400.0)), None),
+                TouchGestureUpdate::default()
+            );
+        }
+        assert!(move_three_contacts(&mut gestures, (0.0, -150.0)).is_empty());
+        gestures.cancel_all();
+
+        gestures.down_on_desktop(0, Point::from((200.0, 400.0)));
+        gestures.down_on_desktop(1, Point::from((300.0, 400.0)));
+        assert_eq!(
+            gestures.down(2, Point::from((400.0, 400.0)), None),
+            TouchGestureUpdate::default()
+        );
+        assert!(gestures.gesture.is_none());
+        let third = gestures.down_on_desktop(3, Point::from((500.0, 400.0)));
+        assert_eq!(third.captured_slots, [0, 1, 3]);
+        assert_eq!(gestures.up(2), TouchGestureUpdate::default());
+        gestures.cancel_all();
+        assert!(gestures.gesture.is_none());
+        assert!(gestures.contacts.is_empty());
+    }
+
+    #[test]
+    fn four_finger_window_crush_keeps_its_window_target() {
+        let mut gestures = TouchGestureState::default();
+        let positions = [
+            (150.0, 300.0),
+            (350.0, 300.0),
+            (150.0, 500.0),
+            (350.0, 500.0),
+        ];
+        for (slot, position) in positions.into_iter().enumerate() {
+            gestures.down(
+                slot as i32,
+                Point::from(position),
+                Some(target(false, false)),
+            );
+        }
+        let mut actions = Vec::new();
+        for (slot, (x, y)) in positions.into_iter().enumerate() {
+            actions.extend(
+                gestures
+                    .motion(
+                        slot as i32,
+                        Point::from((250.0 + (x - 250.0) * 0.5, 400.0 + (y - 400.0) * 0.5)),
+                    )
+                    .actions,
+            );
+        }
+        assert_eq!(actions, [TouchWindowAction::Close { window_id: 7 }]);
+        for slot in 0..4 {
+            assert!(gestures.up(slot).consume);
+        }
+        assert!(gestures.gesture.is_none());
     }
 
     #[test]
@@ -1850,6 +2341,62 @@ mod tests {
 
         let up = gestures.up(1);
         assert_eq!(up, TouchGestureUpdate::default());
+    }
+
+    #[test]
+    fn corner_move_keeps_its_size_through_release_despite_client_size_hints() {
+        let mut gestures = TouchGestureState::default();
+        let target = target(true, false);
+        gestures.down(0, Point::from((110.0, 210.0)), Some(target));
+        let begin = gestures.motion(0, Point::from((150.0, 250.0)));
+        let update = gestures.motion(0, Point::from((180.0, 290.0)));
+        let end = gestures.up(0);
+        assert!(end.consume);
+        assert!(matches!(
+            end.actions.as_slice(),
+            [TouchWindowAction::Placement {
+                phase: WindowPlacementPhase::End,
+                change: WindowPlacementChange::Move,
+                ..
+            }]
+        ));
+        for action in begin
+            .actions
+            .into_iter()
+            .chain(update.actions)
+            .chain(end.actions)
+        {
+            let TouchWindowAction::Placement {
+                geometry, change, ..
+            } = action
+            else {
+                panic!("corner movement emitted a non-placement action");
+            };
+            for (minimum, maximum) in [
+                (Size::from((1920, 1080)), Size::from((1920, 1080))),
+                (Size::from((1, 1)), Size::from((200, 200))),
+            ] {
+                let constrained =
+                    client_geometry_with_constraints(geometry, change, minimum, maximum);
+                assert_eq!(constrained.size, Size::from((300, 400)));
+                assert_eq!(
+                    constrained.loc,
+                    Point::from((rounded_i32(geometry.x), rounded_i32(geometry.y)))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pinch_still_honors_size_hints_around_its_center() {
+        let geometry = client_geometry_with_constraints(
+            target(false, false).geometry,
+            WindowPlacementChange::Resize,
+            Size::from((320, 240)),
+            Size::from((1000, 350)),
+        );
+        assert_eq!(geometry.size, Size::from((320, 350)));
+        assert_eq!(geometry.loc, Point::from((90, 225)));
     }
 
     #[test]
@@ -1900,5 +2447,56 @@ mod tests {
             TouchGestureUpdate::default()
         );
         assert_eq!(gestures.up(5), TouchGestureUpdate::default());
+    }
+
+    #[test]
+    fn touch_move_uses_the_super_grab_restored_size_and_location() {
+        let transform = PlacementTransform {
+            source: WindowGeometry {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            restored: WindowGeometry {
+                x: 100.0,
+                y: 200.0,
+                width: 900.0,
+                height: 620.0,
+            },
+        };
+        for delta in [0.0, 40.0, 120.0] {
+            let geometry = transform.apply(
+                WindowGeometry {
+                    x: delta,
+                    y: delta * 0.5,
+                    ..transform.source
+                },
+                WindowPlacementChange::Move,
+            );
+            assert_eq!((geometry.width, geometry.height), (900.0, 620.0));
+            assert_eq!(
+                (geometry.x, geometry.y),
+                (100.0 + delta, 200.0 + delta * 0.5)
+            );
+        }
+        let resized = transform.apply(
+            WindowGeometry {
+                x: -20.0,
+                y: -10.0,
+                width: 1960.0,
+                height: 1100.0,
+            },
+            WindowPlacementChange::Resize,
+        );
+        assert_eq!(
+            resized,
+            WindowGeometry {
+                x: 80.0,
+                y: 190.0,
+                width: 940.0,
+                height: 640.0
+            }
+        );
     }
 }

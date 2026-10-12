@@ -13,6 +13,9 @@ import 'desktop_popup_surface_layers.dart';
 import 'desktop_window_frame.dart';
 import 'desktop_workspace.dart';
 
+/// [heldLayers] are the pets each window holds, keyed by the window's object
+/// id (see `desktopHeldLayersByWindow`). Each window's frame draws its own,
+/// inside the transforms that move it.
 List<Widget> buildDesktopWindowLayers({
   bool desktopVisible = false,
   required List<DesktopWindowPlacement> placements,
@@ -47,6 +50,7 @@ List<Widget> buildDesktopWindowLayers({
   bool swipeOverviewUpCloses = false,
   ValueChanged<double>? onOverviewFling,
   VoidCallback? onOverviewPanStart,
+  Map<int, List<DenialWindow>> heldLayers = const <int, List<DenialWindow>>{},
 }) {
   final layers = <Widget>[];
   for (final placement in placements) {
@@ -123,7 +127,7 @@ List<Widget> buildDesktopWindowLayers({
             stageBounds: switcherStageBounds,
             desktopWidgetFrame: desktopWidgetFrames[placement.objectId],
           )
-        : desktop.overviewFrame(placement);
+        : desktop.visualFrame(placement);
     if (arrangedFrame == null || arrangedFrame.isEmpty) {
       continue;
     }
@@ -170,6 +174,11 @@ List<Widget> buildDesktopWindowLayers({
         : !placement.minimized && placement.z == topZ;
     final selected =
         overview && desktop.overview?.selectedObjectId == placement.objectId;
+    // Held pets, like popups, are absent from a desktop widget and from a
+    // window leaving a closing workspace overview.
+    final held = desktopWidget || departing
+        ? const <DenialWindow>[]
+        : heldLayers[placement.objectId] ?? const <DenialWindow>[];
     layers.add(
       DesktopWindowFrame(
         key: windowFrameKeys.putIfAbsent(placement.objectId, () => GlobalKey()),
@@ -192,8 +201,6 @@ List<Widget> buildDesktopWindowLayers({
         selected: selected,
         windowRevealRegistry: windowRevealRegistry,
         onOverviewTap: () => onActivateWindow(window),
-        // Overview up-swipe terminates the native split group. The desktop's
-        // bottom-edge gesture remains a separate background/minimize action.
         onOverviewClose: () => (swipeOverviewUpCloses
             ? onTerminateOverviewGroup
             : onCloseWindow)(window),
@@ -204,6 +211,7 @@ List<Widget> buildDesktopWindowLayers({
         swipeOverviewUpCloses: swipeOverviewUpCloses,
         onOverviewFling: onOverviewFling,
         onOverviewPanStart: onOverviewPanStart,
+        heldPets: held,
       ),
     );
     if (!desktopWidget && !departing) {

@@ -155,6 +155,9 @@ mod handlers;
 #[cfg(feature = "flutter")]
 #[path = "wayland_frontend/idle_inhibit.rs"]
 mod idle_inhibit;
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/idle_notify.rs"]
+mod idle_notify;
 #[path = "wayland_frontend/input.rs"]
 mod input;
 #[path = "wayland_frontend/input_method.rs"]
@@ -174,6 +177,9 @@ mod input_source;
 mod layer_shell;
 #[path = "wayland_frontend/output_power.rs"]
 mod output_power;
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/pet.rs"]
+mod pet;
 #[path = "wayland_frontend/presentation.rs"]
 mod presentation;
 #[path = "wayland_frontend/scene_input.rs"]
@@ -396,7 +402,11 @@ fn cursor_position_for_modality(pointer_visible: bool, position: (f64, f64)) -> 
     pointer_visible.then_some(position)
 }
 
+#[path = "wayland_frontend/output_metadata.rs"]
+mod output_metadata;
+
 pub(super) struct WaylandFrontend {
+    output_metadata_device: DrmDeviceFd,
     pub start_time: Instant,
     socket_name: OsString,
     loop_handle: LoopHandle<'static, RuntimeState>,
@@ -604,6 +614,8 @@ pub(super) struct WaylandFrontend {
     #[cfg(feature = "flutter")]
     frame_timeline: frame_timeline::FrameTimelineManager,
     #[cfg(feature = "flutter")]
+    pets: pet::Pets,
+    #[cfg(feature = "flutter")]
     mobile_shell: bool,
     /// Touch-first desktop profile: exclusive/split admission, edge resize and
     /// strip overview are enabled for `DENIAL_SHELL_PROFILE=gamepad`.
@@ -614,6 +626,8 @@ pub(super) struct WaylandFrontend {
     idle_inhibition_dirty: bool,
     #[cfg(feature = "flutter")]
     idle_inhibition_cached: bool,
+    #[cfg(feature = "flutter")]
+    idle_notifier: smithay::wayland::idle_notify::IdleNotifierState<RuntimeState>,
     output_power: OutputPowerManager,
     gamma_control: gamma_control::GammaControlManager,
     screencopy: screencopy::ScreencopyManager,

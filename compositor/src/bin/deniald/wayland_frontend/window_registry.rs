@@ -37,6 +37,8 @@ pub(super) struct WindowRecord {
     /// eviction can restore the pre-drag size instead of the squeezed sliver.
     #[cfg(feature = "flutter")]
     pub(super) gamepad_single_snapshot: Option<Option<Rectangle<i32, Logical>>>,
+    #[cfg(feature = "flutter")]
+    pub(super) mobile_restore: Option<(WindowGeometryIntent, WindowPlacementState)>,
     pub(super) layout_insertion_anchor: Option<ObjectId>,
     pub(super) restored_position: bool,
     pub(super) client_geometry_state_requested: bool,
