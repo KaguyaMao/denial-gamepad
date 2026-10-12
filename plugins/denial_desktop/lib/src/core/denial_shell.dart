@@ -245,6 +245,7 @@ class _ProfileScene extends StatelessWidget {
                 child: ShellSecureStage(
                 useConfiguredLockAnimation:
                     policyProfile == ReferenceShellProfile.desktop,
+                chrome: scene.chrome,
                 scene: Stack(
                   fit: StackFit.expand,
                   children: [

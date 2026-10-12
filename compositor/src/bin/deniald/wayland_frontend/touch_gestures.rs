@@ -226,24 +226,19 @@ impl Gesture {
                 window_id,
                 phase: WindowPlacementPhase::End,
                 edges,
-                delta_x: last.x - origin.x,
-                delta_y: last.y - origin.y,
+                delta_x: 0.0,
+                delta_y: 0.0,
             }),
+            // A short bottom-strip swipe backgrounds the focused app on
+            // release; a long swipe is handled as an Overview shell action
+            // while the drag is still moving.
             Self::GamepadHomeSwipe {
                 window_id,
                 origin,
                 last,
-                overview_distance,
                 ..
-            } => {
-                let delta = last - origin;
-                if delta.y <= -overview_distance && delta.y.abs() >= delta.x.abs() {
-                    Some(TouchWindowAction::Overview)
-                } else if delta.y <= -MINIMIZE_SWIPE_DISTANCE && delta.y.abs() >= delta.x.abs() {
-                    Some(TouchWindowAction::Minimize { window_id })
-                } else {
-                    None
-                }
+            } if last.y - origin.y <= -72.0 && window_id != 0 => {
+                Some(TouchWindowAction::Minimize { window_id })
             }
             _ => None,
         }
@@ -465,15 +460,23 @@ impl TouchGestureState {
             slot: gesture_slot,
             window_id,
             origin,
+            last,
             edges,
             started,
-            ..
         }) = self.gesture
             && gesture_slot == slot
         {
-            let delta = position - origin;
+            let travel = position - origin;
+            if !started && travel.x.hypot(travel.y) < MOVE_SLOP {
+                return TouchGestureUpdate::default();
+            }
+            let captured_slots = self.capture_slots(&[slot]);
+            // The layout consumes per-sample deltas, not the total travel from
+            // the origin: resending the cumulative offset would apply it again
+            // on every motion sample and squeeze the pane away immediately.
+            let step = position - last;
             let mut actions = Vec::new();
-            if !started && delta.x * delta.x + delta.y * delta.y >= MOVE_SLOP * MOVE_SLOP {
+            if !started {
                 actions.push(TouchWindowAction::EdgeResize {
                     window_id,
                     phase: WindowPlacementPhase::Begin,
@@ -481,43 +484,27 @@ impl TouchGestureState {
                     delta_x: 0.0,
                     delta_y: 0.0,
                 });
-                self.gesture = Some(Gesture::EdgeResize {
-                    slot,
-                    window_id,
-                    origin,
-                    last: position,
-                    edges,
-                    started: true,
-                });
-                return TouchGestureUpdate {
-                    consume: true,
-                    captured_slots: self.capture_slots(&[slot]),
-                    actions,
-                };
             }
-            if started {
-                self.gesture = Some(Gesture::EdgeResize {
-                    slot,
-                    window_id,
-                    origin,
-                    last: position,
-                    edges,
-                    started: true,
-                });
-                actions.push(TouchWindowAction::EdgeResize {
-                    window_id,
-                    phase: WindowPlacementPhase::Update,
-                    edges,
-                    delta_x: delta.x,
-                    delta_y: delta.y,
-                });
-                return TouchGestureUpdate {
-                    consume: true,
-                    captured_slots: Vec::new(),
-                    actions,
-                };
-            }
-            return TouchGestureUpdate::default();
+            actions.push(TouchWindowAction::EdgeResize {
+                window_id,
+                phase: WindowPlacementPhase::Update,
+                edges,
+                delta_x: step.x,
+                delta_y: step.y,
+            });
+            self.gesture = Some(Gesture::EdgeResize {
+                slot,
+                window_id,
+                origin,
+                last: position,
+                edges,
+                started: true,
+            });
+            return TouchGestureUpdate {
+                consume: true,
+                captured_slots,
+                actions,
+            };
         }
         if let Some(Gesture::GamepadHomeSwipe {
             slot: gesture_slot,
@@ -528,17 +515,28 @@ impl TouchGestureState {
         }) = self.gesture
             && gesture_slot == slot
         {
-            self.gesture = Some(Gesture::GamepadHomeSwipe {
+            let delta = position - origin;
+            let mut actions = Vec::new();
+            let mut gesture = Gesture::GamepadHomeSwipe {
                 slot,
                 window_id,
                 origin,
                 last: position,
                 overview_distance,
-            });
+            };
+            // The long swipe opens overview as soon as it crosses the
+            // distance, then blocks so release never also backgrounds it.
+            if delta.y <= -overview_distance && delta.y.abs() >= delta.x.abs() {
+                actions.push(TouchWindowAction::Overview);
+                gesture = Gesture::Blocked {
+                    window_id: Some(window_id),
+                };
+            }
+            self.gesture = Some(gesture);
             return TouchGestureUpdate {
                 consume: true,
                 captured_slots: self.capture_slots(&[slot]),
-                actions: Vec::new(),
+                actions,
             };
         }
 
@@ -821,7 +819,19 @@ impl TouchGestureState {
     }
 
     pub(super) fn cancel_at(&mut self, slot: i32, timestamp_micros: u64) -> TouchGestureUpdate {
-        self.finish_contact(slot, true, timestamp_micros)
+        let mut update = self.finish_contact(slot, true, timestamp_micros);
+        // A cancelled gesture never backgrounds, opens overview, or closes a
+        // window; only committed placement geometry and the resize/gesture
+        // teardown actions survive.
+        update.actions.retain(|action| {
+            !matches!(
+                action,
+                TouchWindowAction::Minimize { .. }
+                    | TouchWindowAction::Overview
+                    | TouchWindowAction::Close { .. }
+            )
+        });
+        update
     }
 
     fn finish_contact(
@@ -1809,6 +1819,133 @@ mod tests {
             monitor_id: -1,
             resize_edges: None,
         }
+    }
+
+    fn gamepad_target() -> TouchWindowTarget {
+        TouchWindowTarget {
+            gamepad_shell: true,
+            geometry_locked: true,
+            monitor_id: 1,
+            ..target(false, true)
+        }
+    }
+
+    #[test]
+    fn gamepad_bottom_tap_is_not_captured() {
+        let mut gestures = TouchGestureState::default();
+        let target = TouchWindowTarget {
+            in_gesture_strip: true,
+            ..gamepad_target()
+        };
+        assert_eq!(
+            gestures.down(1, (200.0, 590.0).into(), Some(target)),
+            TouchGestureUpdate::default()
+        );
+        assert_eq!(gestures.up(1), TouchGestureUpdate::default());
+    }
+
+    #[test]
+    fn gamepad_short_swipe_captures_then_minimizes_on_release() {
+        let mut gestures = TouchGestureState::default();
+        let target = TouchWindowTarget {
+            in_gesture_strip: true,
+            ..gamepad_target()
+        };
+        gestures.down(1, (200.0, 590.0).into(), Some(target));
+        let captured = gestures.motion(1, (200.0, 490.0).into());
+        assert!(captured.consume);
+        assert_eq!(captured.captured_slots, [1]);
+        assert!(captured.actions.is_empty());
+        assert_eq!(
+            gestures.up(1).actions,
+            [TouchWindowAction::Minimize { window_id: 7 }]
+        );
+    }
+
+    #[test]
+    fn gamepad_long_swipe_opens_overview_once_without_minimizing() {
+        let mut gestures = TouchGestureState::default();
+        let target = TouchWindowTarget {
+            in_gesture_strip: true,
+            ..gamepad_target()
+        };
+        gestures.down(1, (200.0, 590.0).into(), Some(target));
+        let captured = gestures.motion(1, (200.0, 380.0).into());
+        assert_eq!(captured.captured_slots, [1]);
+        assert_eq!(captured.actions, [TouchWindowAction::Overview]);
+        assert!(gestures.motion(1, (200.0, 300.0).into()).actions.is_empty());
+        assert!(gestures.up(1).actions.is_empty());
+    }
+
+    #[test]
+    fn gamepad_cancel_never_minimizes() {
+        let mut gestures = TouchGestureState::default();
+        let target = TouchWindowTarget {
+            in_gesture_strip: true,
+            ..gamepad_target()
+        };
+        gestures.down(1, (200.0, 590.0).into(), Some(target));
+        gestures.motion(1, (200.0, 490.0).into());
+        assert!(gestures.cancel(1).actions.is_empty());
+    }
+
+    #[test]
+    fn gamepad_center_and_corner_contacts_never_move_or_resize() {
+        let mut gestures = TouchGestureState::default();
+        let target = TouchWindowTarget {
+            in_move_corner: true,
+            ..gamepad_target()
+        };
+        gestures.down(1, (110.0, 210.0).into(), Some(target));
+        assert!(gestures.motion(1, (150.0, 250.0).into()).actions.is_empty());
+        gestures.down(2, (350.0, 350.0).into(), Some(target));
+        assert!(gestures.motion(2, (400.0, 400.0).into()).actions.is_empty());
+    }
+
+    /// Regression: the layout consumes per-sample deltas. Resending the total
+    /// travel from the origin on every sample squeezed the pane away on the
+    /// first drag, backgrounding the window instead of splitting it.
+    #[test]
+    fn gamepad_edge_resize_sends_incremental_deltas() {
+        let mut gestures = TouchGestureState::default();
+        let target = TouchWindowTarget {
+            resize_edges: Some(LayoutResizeEdges {
+                right: true,
+                ..Default::default()
+            }),
+            ..gamepad_target()
+        };
+        gestures.down(1, (400.0, 400.0).into(), Some(target));
+
+        let first = gestures.motion(1, (420.0, 400.0).into());
+        assert!(first.consume);
+        assert_eq!(first.captured_slots, [1]);
+        assert!(matches!(
+            first.actions.as_slice(),
+            [
+                TouchWindowAction::EdgeResize {
+                    phase: WindowPlacementPhase::Begin,
+                    delta_x: 0.0,
+                    ..
+                },
+                TouchWindowAction::EdgeResize {
+                    phase: WindowPlacementPhase::Update,
+                    delta_x: 20.0,
+                    ..
+                }
+            ]
+        ));
+
+        // A further sample reports only its own step, not 40 from the origin.
+        let second = gestures.motion(1, (430.0, 400.0).into());
+        assert!(matches!(
+            second.actions.as_slice(),
+            [TouchWindowAction::EdgeResize {
+                phase: WindowPlacementPhase::Update,
+                delta_x: 10.0,
+                ..
+            }]
+        ));
     }
 
     fn begin_desktop_swipe(gestures: &mut TouchGestureState) {
