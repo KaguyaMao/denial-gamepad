@@ -187,7 +187,9 @@ fn start_systemd_graphical_session(
 /// by `denial-session.target` in the same activation.
 fn start_screencast_portal_backend(connection: &zbus::blocking::Connection) {
     match change_systemd_graphical_session(connection, "StartUnit", SCREENCAST_PORTAL_UNIT) {
-        Ok(job) => debug!(unit = SCREENCAST_PORTAL_UNIT, job = %job, "queued the ScreenCast portal backend"),
+        Ok(job) => {
+            debug!(unit = SCREENCAST_PORTAL_UNIT, job = %job, "queued the ScreenCast portal backend")
+        }
         // Best-effort: a distribution may route ScreenCast to a different
         // backend, or ship no wlroots backend at all.
         Err(error) => debug!(

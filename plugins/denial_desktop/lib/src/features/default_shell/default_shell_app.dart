@@ -76,8 +76,9 @@ class DenialShellApp extends StatelessWidget {
               : <Widget>[SystemLevelHudLayer(), NotificationBannerLayer()],
         ),
         // The touch gamepad profile reuses the desktop scene; touch policy is
-        // layered in through the desktop input publisher, and its shade chrome
-        // keeps the top-edge pull-down while the Dock shows the status.
+        // layered in through the desktop input publisher, and its chrome keeps
+        // the top-edge pull-down, hosts the corner side sheets, and shows the
+        // Dock's status.
         gamepad: const DenialShellScene(
           content: DesktopShell(),
           chrome: GamepadShadeChrome(),

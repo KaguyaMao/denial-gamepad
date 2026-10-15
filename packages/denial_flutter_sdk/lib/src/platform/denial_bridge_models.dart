@@ -19,6 +19,12 @@ enum DenialShellAction {
   focusRight,
   focusUp,
   focusDown,
+
+  /// A bottom-left corner outward swipe: Denial's dashboard side panel.
+  handheldDashboardLeft,
+
+  /// A bottom-right corner outward swipe: the Handheld Daemon sidebar.
+  handheldSidebarRight,
 }
 
 class DenialShellActionEvent {

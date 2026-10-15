@@ -337,7 +337,9 @@ enum ShellActionKind {
   FocusLeft(14),
   FocusRight(15),
   FocusUp(16),
-  FocusDown(17);
+  FocusDown(17),
+  HandheldDashboardLeft(18),
+  HandheldSidebarRight(19);
 
   final int value;
   const ShellActionKind(this.value);
@@ -362,6 +364,8 @@ enum ShellActionKind {
       case 15: return ShellActionKind.FocusRight;
       case 16: return ShellActionKind.FocusUp;
       case 17: return ShellActionKind.FocusDown;
+      case 18: return ShellActionKind.HandheldDashboardLeft;
+      case 19: return ShellActionKind.HandheldSidebarRight;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -370,7 +374,7 @@ enum ShellActionKind {
       value == null ? null : ShellActionKind.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 17;
+  static const int maxValue = 19;
   static const fb.Reader<ShellActionKind> reader = _ShellActionKindReader();
 }
 

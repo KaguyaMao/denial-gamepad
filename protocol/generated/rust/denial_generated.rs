@@ -789,10 +789,10 @@ impl flatbuffers::SimpleToVerifyInSlice for WindowActionKind {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_SHELL_ACTION_KIND: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_SHELL_ACTION_KIND: u8 = 17;
+pub const ENUM_MAX_SHELL_ACTION_KIND: u8 = 19;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_SHELL_ACTION_KIND: [ShellActionKind; 18] = [
+pub const ENUM_VALUES_SHELL_ACTION_KIND: [ShellActionKind; 20] = [
   ShellActionKind::Applications,
   ShellActionKind::Overview,
   ShellActionKind::WindowSwitcherNext,
@@ -811,6 +811,8 @@ pub const ENUM_VALUES_SHELL_ACTION_KIND: [ShellActionKind; 18] = [
   ShellActionKind::FocusRight,
   ShellActionKind::FocusUp,
   ShellActionKind::FocusDown,
+  ShellActionKind::HandheldDashboardLeft,
+  ShellActionKind::HandheldSidebarRight,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -836,9 +838,11 @@ impl ShellActionKind {
   pub const FocusRight: Self = Self(15);
   pub const FocusUp: Self = Self(16);
   pub const FocusDown: Self = Self(17);
+  pub const HandheldDashboardLeft: Self = Self(18);
+  pub const HandheldSidebarRight: Self = Self(19);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 17;
+  pub const ENUM_MAX: u8 = 19;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::Applications,
     Self::Overview,
@@ -858,6 +862,8 @@ impl ShellActionKind {
     Self::FocusRight,
     Self::FocusUp,
     Self::FocusDown,
+    Self::HandheldDashboardLeft,
+    Self::HandheldSidebarRight,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -880,6 +886,8 @@ impl ShellActionKind {
       Self::FocusRight => Some("FocusRight"),
       Self::FocusUp => Some("FocusUp"),
       Self::FocusDown => Some("FocusDown"),
+      Self::HandheldDashboardLeft => Some("HandheldDashboardLeft"),
+      Self::HandheldSidebarRight => Some("HandheldSidebarRight"),
       _ => None,
     }
   }

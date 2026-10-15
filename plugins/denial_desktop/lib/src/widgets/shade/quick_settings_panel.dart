@@ -685,8 +685,12 @@ class _QuickSettingsTilesSection extends ConsumerWidget {
                 active: presentation == ReferenceShellProfile.desktop,
                 wide: true,
                 onTap: () {
-                  ref.read(referenceShellProvider.notifier).closeQuickSettings();
-                  ref.read(referenceShellPresentationProvider.notifier).toggle();
+                  ref
+                      .read(referenceShellProvider.notifier)
+                      .closeQuickSettings();
+                  ref
+                      .read(referenceShellPresentationProvider.notifier)
+                      .toggle();
                 },
               ),
             ),

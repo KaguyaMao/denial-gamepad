@@ -328,6 +328,10 @@ pub enum ShellAction {
     FocusRight,
     FocusUp,
     FocusDown,
+    /// A bottom-left corner outward swipe: Denial's dashboard side panel.
+    HandheldDashboardLeft,
+    /// A bottom-right corner outward swipe: the Handheld Daemon sidebar.
+    HandheldSidebarRight,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -365,6 +369,8 @@ impl ShellAction {
             Self::FocusRight => fb::ShellActionKind::FocusRight,
             Self::FocusUp => fb::ShellActionKind::FocusUp,
             Self::FocusDown => fb::ShellActionKind::FocusDown,
+            Self::HandheldDashboardLeft => fb::ShellActionKind::HandheldDashboardLeft,
+            Self::HandheldSidebarRight => fb::ShellActionKind::HandheldSidebarRight,
         }
     }
 }

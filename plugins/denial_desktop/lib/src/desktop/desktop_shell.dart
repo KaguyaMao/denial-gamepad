@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/shell_plugin_services.dart';
 import '../features/default_shell/panel_composition.dart';
+import '../features/gamepad/side_panel_controller.dart';
 import '../settings/settings_application.dart';
 import '../settings/widgets/settings_navigation.dart';
 import '../state/clipboard_tray.dart';
@@ -67,6 +68,9 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     super.initState();
     _panelHoverController = DesktopPanelHoverController(onClose: _closePanels);
     ref.read(hapticsServiceProvider).prewarm();
+    // The dashboard edge sheet lives in the profile chrome, a sibling of this
+    // scene, so it reaches Settings through this shared opener.
+    ref.read(settingsOpenerProvider).open = _openSettings;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
         return;
@@ -86,6 +90,9 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
   @override
   void dispose() {
     _panelHoverController.dispose();
+    if (ref.read(settingsOpenerProvider).open == _openSettings) {
+      ref.read(settingsOpenerProvider).open = null;
+    }
     _windowSwitcherHoldTimer?.cancel();
     _windowSwitcherCleanupTimer?.cancel();
     for (final timer in _workspaceTransitionTimers.values) {
@@ -155,6 +162,10 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
         if (monitorId != null && workspaceId != null) {
           _workspaceChanged(monitorId, workspaceId);
         }
+      case DenialShellAction.handheldDashboardLeft:
+        ref.read(sidePanelProvider.notifier).toggle(SidePanelSide.left);
+      case DenialShellAction.handheldSidebarRight:
+        ref.read(sidePanelProvider.notifier).toggle(SidePanelSide.right);
     }
   }
 

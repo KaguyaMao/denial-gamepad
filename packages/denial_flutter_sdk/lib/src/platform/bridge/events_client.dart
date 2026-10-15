@@ -120,6 +120,10 @@ final class BridgeEventsClient {
           wire.ShellActionKind.FocusRight => DenialShellAction.focusRight,
           wire.ShellActionKind.FocusUp => DenialShellAction.focusUp,
           wire.ShellActionKind.FocusDown => DenialShellAction.focusDown,
+          wire.ShellActionKind.HandheldDashboardLeft =>
+            DenialShellAction.handheldDashboardLeft,
+          wire.ShellActionKind.HandheldSidebarRight =>
+            DenialShellAction.handheldSidebarRight,
         };
         if (!_shellActions.isClosed) {
           _shellActions.add(

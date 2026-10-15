@@ -891,7 +891,11 @@ impl WaylandFrontend {
         else {
             return false;
         };
-        let Some(output) = self.outputs.iter().find(|output| output.id == physical_output) else {
+        let Some(output) = self
+            .outputs
+            .iter()
+            .find(|output| output.id == physical_output)
+        else {
             return false;
         };
         let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
@@ -1501,15 +1505,14 @@ impl WaylandFrontend {
         // window coming back from overview against the exclusive window already
         // in front. Drop the suspended node and re-enter admission below.
         #[cfg(feature = "flutter")]
-        let force_gamepad_replace = if self.gamepad_shell
-            && self.window_layout.is_suspended(&window_id)
-        {
-            let replaces = self.gamepad_exclusive_restore_replaces(window);
-            self.detach_window_from_layout(window, false);
-            replaces
-        } else {
-            false
-        };
+        let force_gamepad_replace =
+            if self.gamepad_shell && self.window_layout.is_suspended(&window_id) {
+                let replaces = self.gamepad_exclusive_restore_replaces(window);
+                self.detach_window_from_layout(window, false);
+                replaces
+            } else {
+                false
+            };
         if self.window_layout.contains(&window_id) {
             if adopt_scrolling_maximize && self.adopt_scrolling_maximize(&window_id) {
                 self.arrange_layout_windows();

@@ -3,7 +3,7 @@
 # 对标 steamos-session-select：先写显示管理器下次自动登录的会话，再退出当前
 # 会话，由显示管理器接着自动进入目标会话。
 #
-# 用法: denial-tablet-session-select <denial|gamepad|mobile|gamescope|plasma>
+# 用法: denial-tablet-session-select <denial|pc|gamepad|mobile|gamescope|plasma>
 set -e
 
 SET_SESSION="/usr/lib/steamos/steam-set-session"
@@ -62,6 +62,7 @@ Usage: $(basename "$0") <mode>
 
 Modes:
   denial      进入 Denial 平板桌面（desktop shell）
+  pc          进入 Denial PC 桌面（desktop profile，本地最新构建）
   gamepad     进入 Denial 手柄桌面（gamepad profile，全屏触摸手势）
   mobile      进入 Denial Mobile 平板桌面（mobile profile，单应用模式）
   gamescope   返回游戏模式（Steam 游戏会话）
@@ -283,6 +284,45 @@ set_session() {
   exit 1
 }
 
+# Gamescope's auto backend selects Wayland whenever WAYLAND_DISPLAY is present.
+# Denial publishes its own display name to the persistent user manager, but a
+# display-manager handoff can start Gamescope before Denial's shutdown cleanup
+# has removed it. Clear and verify the inherited value before logging out, or
+# Gamescope can try to connect to Denial's now-dead socket and exit to a black
+# screen.
+prepare_gamescope_handoff() {
+  local environment
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    log_record 1 'could not read systemd user-manager environment for gamescope handoff'
+    notify_fail \
+      '无法返回游戏模式' \
+      '无法检查 systemd 用户环境；当前会话保持不变。'
+    return 1
+  fi
+  if ! systemctl --user unset-environment WAYLAND_DISPLAY; then
+    log_record 1 'could not clear WAYLAND_DISPLAY from the systemd user manager'
+    notify_fail \
+      '无法返回游戏模式' \
+      '无法清除残留的 Wayland 显示环境；当前会话保持不变。'
+    return 1
+  fi
+  if ! environment="$(systemctl --user show-environment)"; then
+    log_record 1 'could not verify systemd user-manager environment after cleanup'
+    notify_fail \
+      '无法返回游戏模式' \
+      '无法验证 Wayland 环境是否清除；当前会话保持不变。'
+    return 1
+  fi
+  if grep -q '^WAYLAND_DISPLAY=' <<<"$environment"; then
+    log_record 1 'WAYLAND_DISPLAY remained in the systemd user-manager environment'
+    notify_fail \
+      '无法返回游戏模式' \
+      'systemd 用户环境仍包含旧 Wayland 显示；当前会话保持不变。'
+    return 1
+  fi
+  log_step 'verified WAYLAND_DISPLAY is absent before gamescope handoff'
+}
+
 log_step "start mode=${1:-<empty>} desktop=${XDG_CURRENT_DESKTOP:-unset} session_desktop=${XDG_SESSION_DESKTOP:-unset} session_id=${XDG_SESSION_ID:-unset} wayland=${WAYLAND_DISPLAY:-unset} display_manager=$(systemctl show -p Id --value display-manager 2>/dev/null || echo unknown)"
 ensure_polkit_agent
 
@@ -310,6 +350,9 @@ case "${1:-}" in
   denial|tablet|desktop)
     set_session denial-tablet.desktop
     logout_current;;
+  pc)
+    set_session denial-pc.desktop
+    logout_current;;
   gamepad)
     gamepad_session="${2:-denial-gamepad.desktop}"
     [[ "$gamepad_session" =~ ^[A-Za-z0-9._-]+\.desktop$ ]] \
@@ -327,6 +370,9 @@ case "${1:-}" in
       exec steamos-session-select gamescope
     fi
     set_session gamescope-session.desktop
+    if in_denial; then
+      prepare_gamescope_handoff || exit 1
+    fi
     logout_current;;
   plasma|kde)
     if ! in_denial && command -v steamos-session-select >/dev/null 2>&1; then

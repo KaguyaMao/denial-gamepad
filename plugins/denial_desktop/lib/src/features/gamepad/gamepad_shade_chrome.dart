@@ -7,6 +7,7 @@ import 'package:denial_flutter_sdk/input.dart';
 import '../../desktop/desktop_workspace.dart';
 import '../../state/reference_shell_metrics.dart';
 import '../../widgets/shade/system_shade_layer.dart';
+import 'gamepad_side_panels.dart';
 
 /// Height of the Dock overlay above the Gamepad quick-settings shade.
 const double _gamepadDockHeight = 51.0;
@@ -14,8 +15,13 @@ const double _gamepadDockHeight = 51.0;
 /// Profile chrome for the touch-first desktop shell.
 ///
 /// The desktop scene owns the top Dock and all window presentation. This layer
-/// only keeps the top-edge shade gesture available while hiding the status-bar
-/// glyphs, which the Dock already shows.
+/// keeps the top-edge shade gesture available while hiding the status-bar
+/// glyphs, which the Dock already shows, and hosts the two full-height edge
+/// sheets the bottom corners open.
+///
+/// The dashboard sheet's "open settings" request is delivered as a shell action
+/// instead of a callback, so this layer stays independent of the desktop
+/// scene's launcher.
 class GamepadShadeChrome extends ConsumerWidget {
   const GamepadShadeChrome({super.key});
 
@@ -38,25 +44,33 @@ class GamepadShadeChrome extends ConsumerWidget {
         top: media.padding.top + _gamepadDockHeight,
       ),
     );
-    return ShellInputRegion(
-      debugLabel: 'Gamepad shade',
-      active: shadeActive,
-      pointerPolicy: ShellPointerPolicy.fullScene,
-      keyboardPolicy: ShellKeyboardPolicy.capture,
-      compositorPolicy: ShellCompositorPolicy.exclusive,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          const _GamepadShadeGestureRegion(),
-          MediaQuery(
-            data: shadeMedia,
-            child: SystemShadeLayer(
-              ignoring: launchActive,
-              showStatusBar: false,
-            ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ShellInputRegion(
+          debugLabel: 'Gamepad shade',
+          active: shadeActive,
+          pointerPolicy: ShellPointerPolicy.fullScene,
+          keyboardPolicy: ShellKeyboardPolicy.capture,
+          compositorPolicy: ShellCompositorPolicy.exclusive,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              const _GamepadShadeGestureRegion(),
+              MediaQuery(
+                data: shadeMedia,
+                child: SystemShadeLayer(
+                  ignoring: launchActive,
+                  showStatusBar: false,
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+        // Above the shade: a corner swipe must reach its sheet even while the
+        // shade is open, and the sheets own input exclusively when visible.
+        const GamepadSidePanels(),
+      ],
     );
   }
 }

@@ -131,7 +131,8 @@ class DenialShell extends ConsumerWidget {
     final scene = _ProfileScene(
       profile: presentationProfile,
       policyProfile: effectiveProfile,
-      scene: effectiveProfile == ReferenceShellProfile.gamepad &&
+      scene:
+          effectiveProfile == ReferenceShellProfile.gamepad &&
               presentationProfile != ReferenceShellProfile.mobile
           ? gamepad
           : presentationProfile == ReferenceShellProfile.mobile
@@ -243,28 +244,28 @@ class _ProfileScene extends StatelessWidget {
               _GamepadKeyboardInset(
                 enabled: policyProfile == ReferenceShellProfile.gamepad,
                 child: ShellSecureStage(
-                useConfiguredLockAnimation:
-                    policyProfile == ReferenceShellProfile.desktop,
-                chrome: scene.chrome,
-                scene: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ShellPopupHost(
-                      // Keep desktop feature popups inside the scene's paint plane.
-                      // The screenshot selection layer remains above this overlay,
-                      // so its frozen texture includes open menus while its controls
-                      // paint and receive input above them.
-                      child: ShellOverlayHost(
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [scene.content, ...scene.overlays],
+                  useConfiguredLockAnimation:
+                      policyProfile == ReferenceShellProfile.desktop,
+                  chrome: scene.chrome,
+                  scene: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ShellPopupHost(
+                        // Keep desktop feature popups inside the scene's paint plane.
+                        // The screenshot selection layer remains above this overlay,
+                        // so its frozen texture includes open menus while its controls
+                        // paint and receive input above them.
+                        child: ShellOverlayHost(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [scene.content, ...scene.overlays],
+                          ),
                         ),
                       ),
-                    ),
-                    const ScreenshotSelectionLayer(),
-                  ],
+                      const ScreenshotSelectionLayer(),
+                    ],
+                  ),
                 ),
-              ),
               ),
               if (policyProfile == ReferenceShellProfile.mobile ||
                   policyProfile == ReferenceShellProfile.gamepad)

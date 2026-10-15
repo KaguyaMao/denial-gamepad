@@ -201,6 +201,7 @@ class DesktopWindowFrame extends ConsumerWidget {
   final VoidCallback onOverviewDragCancel;
   final ValueChanged<double>? onOverviewFling;
   final VoidCallback? onOverviewPanStart;
+
   /// Touch overview: upward swipe on a card terminates its application.
   final bool swipeOverviewUpTerminates;
 

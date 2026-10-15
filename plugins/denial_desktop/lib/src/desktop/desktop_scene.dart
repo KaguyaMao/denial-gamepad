@@ -38,6 +38,7 @@ import 'desktop_window_frame.dart';
 import 'desktop_window_layers.dart';
 import 'desktop_window_switcher_bounds.dart';
 import 'desktop_windows_only_scene.dart';
+import 'desktop_window_halo.dart';
 import 'desktop_workspace.dart';
 import 'desktop_workspace_overview_deck.dart';
 import 'retained_animated_positioned.dart';
@@ -970,42 +971,54 @@ class _DesktopSceneState extends ConsumerState<DesktopScene>
                     curve: Motion.md3EmphasizedAccelerate,
                     child: Stack(
                       fit: StackFit.expand,
-                      children: buildDesktopWindowLayers(
-                        desktopVisible: desktopVisible,
-                        placements: placements,
-                        windowsById: windowsById,
-                        desktop: desktop,
-                        desktopPlane: true,
-                        minimizeLayerHandoff: _minimizeLayerHandoff,
-                        minimizedPlacementTransition:
-                            _minimizedPlacementTransition,
-                        minimizedPlacementExitFrames:
-                            _minimizedPlacementExitFrames,
-                        minimizeOffscreenBounds: canvas,
-                        minimizedWindowPlacement: minimizedWindowPlacement,
-                        desktopWidgetFrames: homeLayout.windowFrames,
-                        switcher: windowSwitcher,
-                        switcherStageBounds: switcherStageBounds,
-                        topZ: topZ,
-                        reduceMotion: reduceMotion,
-                        displayLayout: displayLayout,
-                        devicePixelRatio: devicePixelRatio,
-                        windowRevealRegistry: _windowRevealRegistry,
-                        windowFrameKeys: _windowFrameKeys,
-                        onActivateWindow: onActivateWindow,
-                        onCloseWindow: onCloseWindow,
-                        onTerminateOverviewGroup: onTerminateOverviewGroup,
-                        onBeginOverviewDrag: onBeginOverviewDrag,
-                        onUpdateOverviewDrag: onUpdateOverviewDrag,
-                        onEndOverviewDrag: onEndOverviewDrag,
-                        onCancelOverviewDrag: onCancelOverviewDrag,
-                        overviewEntryFrames: _overviewEntryFrames,
-                        overviewDepartingFrames: _overviewDepartingFrames,
-                        swipeOverviewUpTerminates: gamepad,
-                        onOverviewFling: gamepad ? _flingOverview : null,
-                        onOverviewPanStart: gamepad ? _stopOverviewFling : null,
-                        heldLayers: heldLayers,
-                      ),
+                      children: [
+                        // Behind the windows: the desktop they cover is blurred
+                        // and dimmed, so the wallpaper recedes under them.
+                        if (gamepad)
+                          DesktopWindowHalo(
+                            placements: placements,
+                            windowsById: windowsById,
+                            desktop: desktop,
+                          ),
+                        ...buildDesktopWindowLayers(
+                          desktopVisible: desktopVisible,
+                          placements: placements,
+                          windowsById: windowsById,
+                          desktop: desktop,
+                          desktopPlane: true,
+                          minimizeLayerHandoff: _minimizeLayerHandoff,
+                          minimizedPlacementTransition:
+                              _minimizedPlacementTransition,
+                          minimizedPlacementExitFrames:
+                              _minimizedPlacementExitFrames,
+                          minimizeOffscreenBounds: canvas,
+                          minimizedWindowPlacement: minimizedWindowPlacement,
+                          desktopWidgetFrames: homeLayout.windowFrames,
+                          switcher: windowSwitcher,
+                          switcherStageBounds: switcherStageBounds,
+                          topZ: topZ,
+                          reduceMotion: reduceMotion,
+                          displayLayout: displayLayout,
+                          devicePixelRatio: devicePixelRatio,
+                          windowRevealRegistry: _windowRevealRegistry,
+                          windowFrameKeys: _windowFrameKeys,
+                          onActivateWindow: onActivateWindow,
+                          onCloseWindow: onCloseWindow,
+                          onTerminateOverviewGroup: onTerminateOverviewGroup,
+                          onBeginOverviewDrag: onBeginOverviewDrag,
+                          onUpdateOverviewDrag: onUpdateOverviewDrag,
+                          onEndOverviewDrag: onEndOverviewDrag,
+                          onCancelOverviewDrag: onCancelOverviewDrag,
+                          overviewEntryFrames: _overviewEntryFrames,
+                          overviewDepartingFrames: _overviewDepartingFrames,
+                          swipeOverviewUpTerminates: gamepad,
+                          onOverviewFling: gamepad ? _flingOverview : null,
+                          onOverviewPanStart: gamepad
+                              ? _stopOverviewFling
+                              : null,
+                          heldLayers: heldLayers,
+                        ),
+                      ],
                     ),
                   ),
                 ),

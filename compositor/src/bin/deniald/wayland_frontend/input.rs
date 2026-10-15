@@ -763,6 +763,35 @@ fn region_accepts_input(region: &InputWindowRegion, position: Point<f64, Logical
         && region.window_id == region.object_id
 }
 
+/// Which Denial side panel a bottom-corner contact belongs to, if any.
+///
+/// The corner is only the trigger origin; the panel action is committed on
+/// release. It is limited to the bottom band so the panels never take the
+/// middle of a side edge, where a window's resize band lives.
+#[cfg(feature = "flutter")]
+pub(super) fn side_panel_at(
+    position: Point<f64, Logical>,
+    bounds: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+) -> Option<super::touch_gestures::SidePanelEdge> {
+    use super::touch_gestures::{
+        SIDE_PANEL_BOTTOM_BAND, SIDE_PANEL_CORNER_FRACTION, SidePanelEdge,
+    };
+    let bottom = f64::from(bounds.loc.y + bounds.size.h);
+    if position.y < bottom - SIDE_PANEL_BOTTOM_BAND {
+        return None;
+    }
+    let left = f64::from(bounds.loc.x);
+    let width = f64::from(bounds.size.w);
+    let corner = width * SIDE_PANEL_CORNER_FRACTION;
+    if position.x <= left + corner {
+        Some(SidePanelEdge::Left)
+    } else if position.x >= left + width - corner {
+        Some(SidePanelEdge::Right)
+    } else {
+        None
+    }
+}
+
 #[cfg(feature = "flutter")]
 fn software_keyboard_owns_touch(
     layout: Option<&InputLayoutSnapshot>,
@@ -949,9 +978,10 @@ impl WaylandFrontend {
             if position.y < f64::from(bounds.loc.y) + crate::options::GAMEPAD_TOP_GESTURE_HEIGHT {
                 return None;
             }
-            // Edge resize, front-to-back, excluding the physical bottom edge
-            // that the home strip owns.
-            if position.y < f64::from(bounds.loc.y + bounds.size.h) - 8.0 {
+            let side_panel = side_panel_at(position, bounds);
+            // Bottom-corner hit zones are reserved for side panels. In the
+            // remaining area, edge resize stays ahead of the home gesture.
+            if side_panel.is_none() && position.y < f64::from(bounds.loc.y + bounds.size.h) - 8.0 {
                 for window in self.space.elements().rev() {
                     let Some(root) = self.window_root_surface(window) else {
                         continue;
@@ -983,6 +1013,7 @@ impl WaylandFrontend {
                             gamepad_shell: true,
                             monitor_id: i64::try_from(output.id.0).ok()?,
                             resize_edges: Some(edges),
+                            side_panel: None,
                         });
                     }
                 }
@@ -1028,6 +1059,7 @@ impl WaylandFrontend {
                 gamepad_shell: true,
                 monitor_id: i64::try_from(output.id.0).ok()?,
                 resize_edges: None,
+                side_panel,
             });
         }
         if layout.exclusive_shell()
@@ -1073,6 +1105,7 @@ impl WaylandFrontend {
             gamepad_shell: false,
             monitor_id: -1,
             resize_edges: None,
+            side_panel: None,
         })
     }
 

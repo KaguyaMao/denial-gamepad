@@ -98,7 +98,10 @@ enum ShellActionKind : ubyte {
   FocusLeft = 14,
   FocusRight = 15,
   FocusUp = 16,
-  FocusDown = 17
+  FocusDown = 17,
+  // Denial side panels opened from the bottom screen corners.
+  HandheldDashboardLeft = 18,
+  HandheldSidebarRight = 19
 }
 
 enum KeyboardCommandKind : ubyte {

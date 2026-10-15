@@ -4,7 +4,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter/foundation.dart' show listEquals;
 
 import 'package:denial_flutter_sdk/input.dart';
 import 'package:denial_flutter_sdk/models.dart';

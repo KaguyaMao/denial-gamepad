@@ -34,6 +34,22 @@ const FOUR_FINGER_CRUSH_DISTANCE: f64 = 32.0;
 const MIN_LOCAL_WINDOW_DIMENSION: f64 = 64.0;
 const MAX_WINDOW_DIMENSION: f64 = 16_384.0;
 
+/// Distance a bottom-corner side swipe must travel to open a side panel.
+///
+/// The trigger is an inward horizontal swipe, so this is measured along X.
+pub(super) const SIDE_PANEL_SWIPE_DISTANCE: f64 = 56.0;
+
+/// Fraction of the work area at each bottom corner that opens a side panel.
+///
+/// The middle keeps the home gesture, so the two panels never compete with it.
+pub(super) const SIDE_PANEL_CORNER_FRACTION: f64 = 0.25;
+
+/// Height of the bottom band where the corner panels can be started.
+///
+/// Matches the home strip. The corner hit zones take priority over edge resize;
+/// the center of the strip keeps the home gesture.
+pub(super) const SIDE_PANEL_BOTTOM_BAND: f64 = 48.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct TouchWindowTarget {
     pub window_id: u64,
@@ -45,6 +61,26 @@ pub(super) struct TouchWindowTarget {
     pub gamepad_shell: bool,
     pub monitor_id: i64,
     pub resize_edges: Option<LayoutResizeEdges>,
+    /// Which side panel an inward swipe from a bottom corner opens.
+    pub side_panel: Option<SidePanelEdge>,
+}
+
+/// Which Denial side panel a bottom-corner swipe opens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SidePanelEdge {
+    /// Left edge: the Denial dashboard.
+    Left,
+    /// Right edge: the Handheld Daemon controls sidebar.
+    Right,
+}
+
+impl SidePanelEdge {
+    pub(super) fn shell_action(self) -> super::super::wire::ShellAction {
+        match self {
+            Self::Left => super::super::wire::ShellAction::HandheldDashboardLeft,
+            Self::Right => super::super::wire::ShellAction::HandheldSidebarRight,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,6 +106,10 @@ pub(super) enum TouchWindowAction {
         delta_y: f64,
     },
     Overview,
+    /// A bottom corner was swiped inward, opening a Denial side panel.
+    SidePanel {
+        edge: SidePanelEdge,
+    },
     Swipe {
         event: TouchpadGestureEvent,
         origin: Point<f64, Logical>,
@@ -140,6 +180,15 @@ enum Gesture {
         last: Point<f64, Logical>,
         overview_distance: f64,
     },
+    /// Bottom-corner inward swipe: opens a Denial side panel. The bottom-corner
+    /// hit zones are reserved for panels, so they cannot also start a resize.
+    SidePanelSwipe {
+        slot: i32,
+        edge: SidePanelEdge,
+        origin: Point<f64, Logical>,
+        last: Point<f64, Logical>,
+        fired: bool,
+    },
     Swipe {
         slots: [i32; 4],
         fingers: usize,
@@ -168,6 +217,7 @@ impl Gesture {
             | Self::MinimizeSwipe { window_id, .. }
             | Self::EdgeResize { window_id, .. }
             | Self::GamepadHomeSwipe { window_id, .. } => Some(window_id),
+            Self::SidePanelSwipe { .. } => None,
             Self::Swipe { .. } => None,
             Self::Blocked { window_id, .. } => window_id,
         }
@@ -182,6 +232,9 @@ impl Gesture {
                 slot: gesture_slot, ..
             }
             | Self::GamepadHomeSwipe {
+                slot: gesture_slot, ..
+            }
+            | Self::SidePanelSwipe {
                 slot: gesture_slot, ..
             } => gesture_slot == slot,
             Self::PinchCandidate { slots, .. }
@@ -240,6 +293,33 @@ impl Gesture {
             }
             _ => None,
         }
+    }
+
+    /// The side panel a corner swipe opens on release.
+    ///
+    /// Inward-only: left-corner swipes travel right, and right-corner swipes
+    /// travel left. The gesture is committed on release.
+    fn side_panel_action(self) -> Option<TouchWindowAction> {
+        let Self::SidePanelSwipe {
+            edge,
+            origin,
+            last,
+            fired: false,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let delta_x = last.x - origin.x;
+        let delta_y = last.y - origin.y;
+        let inward = match edge {
+            SidePanelEdge::Left => delta_x,
+            SidePanelEdge::Right => -delta_x,
+        };
+        if inward < SIDE_PANEL_SWIPE_DISTANCE || inward < delta_y.abs() {
+            return None;
+        }
+        Some(TouchWindowAction::SidePanel { edge })
     }
 }
 
@@ -327,6 +407,18 @@ impl TouchGestureState {
             && self.contacts.len() == 1
             && self.gesture.is_none()
         {
+            // Bottom-corner hit zones belong to the side panels and are checked
+            // before resize or home-strip recognition.
+            if let Some(edge) = target.side_panel {
+                self.gesture = Some(Gesture::SidePanelSwipe {
+                    slot,
+                    edge,
+                    origin: position,
+                    last: position,
+                    fired: false,
+                });
+                return TouchGestureUpdate::default();
+            }
             if !target.in_gesture_strip
                 && let Some(edges) = target.resize_edges
             {
@@ -535,6 +627,30 @@ impl TouchGestureState {
                 consume: true,
                 captured_slots: self.capture_slots(&[slot]),
                 actions,
+            };
+        }
+        if let Some(Gesture::SidePanelSwipe {
+            slot: gesture_slot,
+            edge,
+            origin,
+            ..
+        }) = self.gesture
+            && gesture_slot == slot
+        {
+            let gesture = Gesture::SidePanelSwipe {
+                slot,
+                edge,
+                origin,
+                last: position,
+                fired: false,
+            };
+            self.gesture = Some(gesture);
+            // Fires on release, so a drag can be abandoned without opening a
+            // panel. The bottom-corner zone owns the full contact.
+            return TouchGestureUpdate {
+                consume: true,
+                captured_slots: self.capture_slots(&[slot]),
+                actions: Vec::new(),
             };
         }
 
@@ -862,6 +978,10 @@ impl TouchGestureState {
         }
 
         if let Some(action) = gesture.finish_action() {
+            update.actions.push(action);
+        }
+        // A cancelled drag never opens a panel; only a committed release does.
+        if !cancelled && let Some(action) = gesture.side_panel_action() {
             update.actions.push(action);
         }
         if self.has_captured_window_contact(gesture.window_id())
@@ -1219,6 +1339,9 @@ pub(super) fn apply_actions(
             } => apply_edge_resize(state, window_id, phase, edges, delta_x, delta_y),
             TouchWindowAction::Overview => {
                 state.queue_shell_action(super::super::wire::ShellAction::Overview, None);
+            }
+            TouchWindowAction::SidePanel { edge } => {
+                state.queue_shell_action(edge.shell_action(), None);
             }
             TouchWindowAction::Swipe { event, origin } => {
                 super::input::dispatch_swipe_gesture(state, event, Some(origin));
@@ -1799,6 +1922,7 @@ fn rounded_i32(value: f64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::super::super::native_shortcut::ShortcutGesture;
+    use super::super::input::side_panel_at;
     use super::*;
 
     fn target(in_move_corner: bool, geometry_locked: bool) -> TouchWindowTarget {
@@ -1816,6 +1940,7 @@ mod tests {
             gamepad_shell: false,
             monitor_id: -1,
             resize_edges: None,
+            side_panel: None,
         }
     }
 
@@ -1826,6 +1951,142 @@ mod tests {
             monitor_id: 1,
             ..target(false, true)
         }
+    }
+
+    /// A contact in a bottom corner, where the side panels are triggered.
+    fn corner_target(edge: SidePanelEdge) -> TouchWindowTarget {
+        TouchWindowTarget {
+            in_gesture_strip: true,
+            side_panel: Some(edge),
+            ..gamepad_target()
+        }
+    }
+
+    #[test]
+    fn side_panel_opens_on_an_inward_swipe() {
+        for (edge, from, to) in [
+            (SidePanelEdge::Left, 120.0, 220.0),
+            (SidePanelEdge::Right, 1160.0, 1060.0),
+        ] {
+            let mut gestures = TouchGestureState::default();
+            gestures.down(1, (from, 690.0).into(), Some(corner_target(edge)));
+            gestures.motion(1, (to, 690.0).into());
+            assert_eq!(
+                gestures.up(1).actions,
+                [TouchWindowAction::SidePanel { edge }],
+                "{edge:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn side_panel_ignores_an_outward_swipe() {
+        for (edge, from, to) in [
+            (SidePanelEdge::Left, 120.0, 20.0),
+            (SidePanelEdge::Right, 1160.0, 1260.0),
+        ] {
+            let mut gestures = TouchGestureState::default();
+            gestures.down(1, (from, 690.0).into(), Some(corner_target(edge)));
+            gestures.motion(1, (to, 690.0).into());
+            assert_eq!(gestures.up(1).actions, [], "{edge:?}");
+        }
+    }
+
+    #[test]
+    fn side_panel_ignores_a_short_swipe() {
+        let mut gestures = TouchGestureState::default();
+        gestures.down(
+            1,
+            (120.0, 690.0).into(),
+            Some(corner_target(SidePanelEdge::Left)),
+        );
+        gestures.motion(1, (150.0, 690.0).into());
+        assert_eq!(gestures.up(1).actions, []);
+    }
+
+    #[test]
+    fn side_panel_ignores_a_mostly_vertical_drag() {
+        let mut gestures = TouchGestureState::default();
+        gestures.down(
+            1,
+            (120.0, 690.0).into(),
+            Some(corner_target(SidePanelEdge::Left)),
+        );
+        gestures.motion(1, (200.0, 500.0).into());
+        assert_eq!(gestures.up(1).actions, []);
+    }
+
+    #[test]
+    fn side_panel_is_cancelled_without_firing() {
+        let mut gestures = TouchGestureState::default();
+        gestures.down(
+            1,
+            (120.0, 690.0).into(),
+            Some(corner_target(SidePanelEdge::Left)),
+        );
+        gestures.motion(1, (240.0, 690.0).into());
+        assert_eq!(gestures.cancel(1).actions, []);
+    }
+
+    #[test]
+    fn inward_panel_swipe_wins_over_the_overlapping_resize_band() {
+        for (edge, from, to, resize_edges) in [
+            (
+                SidePanelEdge::Left,
+                120.0,
+                200.0,
+                LayoutResizeEdges {
+                    left: true,
+                    ..LayoutResizeEdges::default()
+                },
+            ),
+            (
+                SidePanelEdge::Right,
+                1160.0,
+                1080.0,
+                LayoutResizeEdges {
+                    right: true,
+                    ..LayoutResizeEdges::default()
+                },
+            ),
+        ] {
+            let mut gestures = TouchGestureState::default();
+            gestures.down(
+                1,
+                (from, 690.0).into(),
+                Some(TouchWindowTarget {
+                    resize_edges: Some(resize_edges),
+                    ..corner_target(edge)
+                }),
+            );
+            assert!(gestures.motion(1, (to, 690.0).into()).consume);
+            assert_eq!(
+                gestures.up(1).actions,
+                [TouchWindowAction::SidePanel { edge }],
+                "{edge:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn side_panel_corner_covers_only_the_outer_quarter() {
+        let bounds = smithay::utils::Rectangle::new(
+            smithay::utils::Point::from((0, 0)),
+            smithay::utils::Size::from((1000, 700)),
+        );
+        // Bottom band only.
+        assert_eq!(side_panel_at((100.0, 400.0).into(), bounds), None);
+        // Outer quarters, left then right.
+        assert_eq!(
+            side_panel_at((100.0, 690.0).into(), bounds),
+            Some(SidePanelEdge::Left)
+        );
+        assert_eq!(
+            side_panel_at((900.0, 690.0).into(), bounds),
+            Some(SidePanelEdge::Right)
+        );
+        // The middle keeps the home gesture.
+        assert_eq!(side_panel_at((500.0, 690.0).into(), bounds), None);
     }
 
     #[test]
